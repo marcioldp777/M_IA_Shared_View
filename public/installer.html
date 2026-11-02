@@ -1,0 +1,51 @@
+<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Instalar na TV Samsung · M I.A. Shared View</title>
+<link rel="stylesheet" href="style.css">
+<style>
+main{padding:32px 28px}.brand{margin-bottom:6px}h1{font-size:34px;letter-spacing:-1px;margin:14px 0 8px}
+.warn{background:#2a2410;border:1px solid #7a6420;border-radius:14px;padding:14px 18px;color:#f3e3b0;font-size:14px;line-height:1.55}
+.warn b{color:#ffd60a}
+section h2{display:flex;align-items:center;gap:10px}section h2 span{background:#26344b;border-radius:50%;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;font-size:15px}
+.tvs{display:grid;gap:10px;margin:14px 0}.tv{display:flex;gap:14px;align-items:center;background:#0f1726;border:2px solid #29364b;border-radius:12px;padding:12px 16px;cursor:pointer}
+.tv.on{border-color:#69e6be}.tv b{display:block}.tv small{color:#a4b1c7}.chip{margin-left:auto;font-size:13px;border-radius:20px;padding:5px 12px;background:#26344b;white-space:nowrap}.chip.ok{background:#14432f;color:#69e6be}.chip.bad{background:#4a1f24;color:#ff8a80}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.row input{margin:0}input[type=password],input[type=text],select{background:#0b101b;color:#fff;border:1px solid #3b4960;border-radius:9px;padding:11px 14px;font:inherit}
+select{min-width:260px}.help{background:#0f1726;border:1px solid #29364b;border-radius:12px;padding:14px 18px;margin-top:12px;line-height:1.7}.help ol{margin:6px 0 0;padding-left:22px}.help code{background:#26344b;border-radius:6px;padding:2px 8px;color:#69e6be;font-size:15px}
+label.inline{display:flex;gap:8px;align-items:center;color:#a4b1c7}label.inline input{margin:0}
+.fields{display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;margin-top:14px}.fields label{color:#a4b1c7}.path{font-size:13px;color:#7f8ca3;word-break:break-all}
+#log{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:8px}#log li{background:#0f1726;border-radius:10px;padding:10px 14px;line-height:1.5;white-space:pre-wrap}
+#log li.ok::before{content:'✔ ';color:#69e6be}#log li.run::before{content:'… ';color:#7ec0ee}#log li.error{border:1px solid #7a2a30;color:#ffb4ab}#log li.error::before{content:'✖ ';color:#ff5a52}
+button.link{background:none;color:#7ec0ee;padding:0;font-weight:400;text-decoration:underline}
+</style>
+<body><main>
+<div class="brand"><img src="logo.png" alt=""><div><strong>M I.A.</strong> <span>Shared View</span></div></div>
+<h1>Instalar na TV Samsung</h1>
+<p>O assistente encontra a TV na rede, assina o app com o seu certificado Samsung e instala tudo — sem abrir o Tizen Studio.</p>
+
+<div class="warn"><b>⚠ Use por sua conta e risco.</b> Este assistente instala um app não oficial em modo desenvolvedor na sua TV. É um projeto pessoal, fornecido "como está", sem garantia e sem vínculo com a Samsung.
+<br><b>Testado em:</b> Samsung UN70DU8000GXZD (2024) com Tizen 9.0. O comportamento pode variar em outros modelos e versões do Tizen (o app exige Tizen 5.5 ou superior).</div>
+
+<section><h2><span>1</span> Escolha a TV</h2>
+<div class="row"><button id="scan">Procurar TVs na rede</button><input type="text" id="manualIp" placeholder="ou digite o IP da TV" size="18"><button id="addIp" class="secondary">Usar este IP</button></div>
+<div id="tvs" class="tvs"></div>
+<div id="devHelp" class="help" hidden></div>
+</section>
+
+<section><h2><span>2</span> Certificado Samsung</h2>
+<p>Use o perfil criado no Tizen Studio (Certificate Manager). O certificado de distribuidor precisa incluir o <b>DUID</b> desta TV.</p>
+<div class="row"><select id="profile"></select></div>
+<div id="manualFiles" class="fields" hidden>
+<label>Autor (.p12)</label><div class="row"><button id="pickAuthor" class="secondary">Escolher…</button><span id="authorPath" class="path"></span></div>
+<label>Distribuidor (.p12)</label><div class="row"><button id="pickDistributor" class="secondary">Escolher…</button><span id="distributorPath" class="path"></span></div>
+</div>
+<div id="profileInfo" class="path" style="margin-top:10px"></div>
+<div class="fields">
+<label for="authorPassword">Senha do certificado</label><input type="password" id="authorPassword" autocomplete="off" placeholder="senha definida no Certificate Manager">
+<label for="distributorPassword">Senha do distribuidor</label><input type="password" id="distributorPassword" autocomplete="off" placeholder="em branco = a mesma senha">
+</div>
+<div class="row" style="margin-top:12px"><label class="inline"><input type="checkbox" id="remember"> Lembrar as senhas neste computador (protegidas pelo Windows)</label><button id="forget" class="link" hidden>Esquecer senhas salvas</button></div>
+</section>
+
+<section><h2><span>3</span> Instalar</h2>
+<div class="row"><button id="install">Instalar na TV</button><span id="installHint" class="path"></span></div>
+<ul id="log"></ul>
+</section>
+</main><script src="installer.js"></script></body></html>

@@ -1,21 +1,23 @@
 {
   "name": "samsung_compartilhamento_tela",
   "version": "1.0.0",
-  "description": "Apresentacao local com receptor Samsung Tizen e WebRTC",
+  "description": "M I.A. Shared View: apresentação na TV pela rede local (Samsung Tizen e Android TV) com WebRTC",
   "main": "desktop.js",
   "scripts": {
     "test": "node --test",
     "start": "node server.js",
     "prepare:tv": "node scripts/prepare-tv.js",
     "desktop": "electron .",
-    "build:windows": "electron-builder --win portable"
+    "build:windows": "electron-builder --win portable",
+    "build:android": "node scripts/build-android.js"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Marcio Lourenço (M I.A. Solutions)",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "koffi": "^2.16.3",
+    "node-forge": "^1.4.2",
     "ws": "^8.22.1"
   },
   "devDependencies": {
@@ -24,9 +26,28 @@
   },
   "build": {
     "appId": "local.sala.tv",
-    "productName": "Sala TV",
+    "productName": "M I.A. Shared View",
     "win": {
-      "target": "portable"
-    }
+      "target": "portable",
+      "icon": "assets/icon.png"
+    },
+    "executableName": "Sala TV",
+    "files": [
+      "package.json",
+      "desktop.js",
+      "server.js",
+      "tools.js",
+      "*-preload.js",
+      "installer/**",
+      "public/**",
+      "assets/**",
+      "tv/config.xml",
+      "tv/index.html",
+      "tv/icon.png"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcioldp777/samsung_Shared_View.git"
   }
 }

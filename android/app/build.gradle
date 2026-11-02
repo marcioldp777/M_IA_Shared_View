@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = 'local.sala.tv'
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = 'local.sala.tv'
+        minSdk = 22 // Fire TV Stick de 1Âª geraÃ§Ã£o (Fire OS 5)
+        targetSdk = 34
+        versionCode = 3
+        versionName = '1.2.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            // Sem keystore prÃ³prio: o APK de release sai assinado com a chave de debug (instalaÃ§Ã£o manual/ADB).
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}

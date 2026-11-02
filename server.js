@@ -2,9 +2,11 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const dgram = require('node:dgram');
 const { WebSocketServer, WebSocket } = require('ws');
 const AUTH_TIMEOUT = 60000;
-function createServer({ log = () => {}, host = os.hostname() } = {}) {
+// diagnostics: grava/repassa as estatísticas de vídeo ("stats ...") que os clientes mandam a cada 5 s.
+function createServer({ log = () => {}, host = os.hostname(), diagnostics = false } = {}) {
   // id da TV -> { tv, name, sender, pending: { ws, timer } }
   const tvs = new Map();
   const senders = new Set();
@@ -26,9 +28,9 @@ function createServer({ log = () => {}, host = os.hostname() } = {}) {
   }
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
-    const files = { '/': 'public/index.html', '/tv': 'tv/index.html', '/app.js': 'public/app.js', '/style.css': 'public/style.css', '/ink.js': 'public/ink.js' };
+    const files = { '/': 'public/index.html', '/tv': 'tv/index.html', '/app.js': 'public/app.js', '/style.css': 'public/style.css', '/ink.js': 'public/ink.js', '/logo.png': 'public/logo.png' };
     if (!files[pathname]) { res.writeHead(404); return res.end(); }
-    res.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8');
+    res.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : pathname.endsWith('.png') ? 'image/png' : 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     fs.createReadStream(path.join(__dirname, files[pathname])).pipe(res);
   });
@@ -49,7 +51,7 @@ function createServer({ log = () => {}, host = os.hostname() } = {}) {
           const old = tvs.get(msg.id);
           if (old) { cancelPending(old, 'A TV reconectou. Tente novamente.'); send(old.sender, { type: 'peer-left' }); unpair(old); old.tv.terminate(); }
           state.role = 'tv'; state.tv = msg.id;
-          tvs.set(msg.id, { tv: ws, name: `${String(msg.name || 'TV').slice(0, 40)} (${ip})`, sender: null, pending: null });
+          tvs.set(msg.id, { tv: ws, ip, name: `${String(msg.name || 'TV').slice(0, 40)} (${ip})`, sender: null, pending: null });
           send(ws, { type: 'joined', name: tvs.get(msg.id).name });
           return broadcast();
         }
@@ -76,6 +78,16 @@ function createServer({ log = () => {}, host = os.hostname() } = {}) {
         send(ws, { type: 'left' });
         return broadcast();
       }
+      // Só o computador pareado (já autorizado na TV) renomeia; a TV guarda o nome para as próximas conexões.
+      if (state.role === 'sender' && msg.type === 'rename') {
+        const entry = tvs.get(state.tv), name = String(msg.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        if (!entry || entry.sender !== ws) return send(ws, { type: 'error', message: 'Conecte-se à TV antes de renomeá-la.' });
+        if (!name) return send(ws, { type: 'error', message: 'Digite um nome para a TV.' });
+        entry.name = `${name} (${entry.ip})`;
+        send(entry.tv, { type: 'renamed', name, full: entry.name });
+        send(ws, { type: 'renamed', name, full: entry.name });
+        return broadcast();
+      }
       if (state.role === 'tv' && msg.type === 'auth-response') {
         const entry = tvs.get(state.tv), pending = entry?.pending;
         if (!pending) return;
@@ -86,10 +98,12 @@ function createServer({ log = () => {}, host = os.hostname() } = {}) {
         send(pending.ws, { type: 'joined', name: entry.name }); send(ws, { type: 'peer-ready' });
         return broadcast();
       }
-      if (!['offer', 'answer', 'ice', 'command', 'image', 'status', 'annotate'].includes(msg.type)) return;
+      if (!['offer', 'answer', 'ice', 'command', 'image', 'status', 'annotate', 'hint'].includes(msg.type)) return;
       const entry = tvs.get(state.tv);
       if (!entry || (state.role === 'sender' && entry.sender !== ws)) return;
       if (msg.type === 'annotate' && state.role !== 'sender') return;
+      if (msg.type === 'hint' && state.role !== 'tv') return;
+      if (!diagnostics && msg.type === 'status' && /^stats /.test(msg.message)) return;
       if (msg.type === 'image' && (state.role !== 'sender' || typeof msg.data !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(msg.data))) return;
       if (state.role === 'tv' && typeof msg.candidate?.candidate === 'string') msg.candidate.candidate = unmask(msg.candidate.candidate);
       if (state.role === 'tv' && typeof msg.description?.sdp === 'string') msg.description.sdp = unmask(msg.description.sdp);
@@ -116,11 +130,29 @@ function createServer({ log = () => {}, host = os.hostname() } = {}) {
   });
   return { server, wss };
 }
+// Anuncia o servidor na rede local para os receptores Android acharem o computador sem digitar IP.
+function startBeacon(port, { interval = 2000, beaconPort = 8788 } = {}) {
+  const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  const message = Buffer.from(JSON.stringify({ app: 'sala-tv', port, host: os.hostname() }));
+  const announce = () => {
+    for (const addresses of Object.values(os.networkInterfaces())) for (const a of addresses || []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      // Broadcast da sub-rede de cada placa (255.255.255.255 sairia só pela rota padrão).
+      const ip = a.address.split('.').map(Number), mask = a.netmask.split('.').map(Number);
+      socket.send(message, beaconPort, ip.map((n, i) => (n | (~mask[i] & 255))).join('.'), () => {});
+    }
+  };
+  socket.on('error', () => {});
+  socket.bind(() => { socket.setBroadcast(true); announce(); });
+  const timer = setInterval(announce, interval);
+  return () => { clearInterval(timer); try { socket.close(); } catch (_) {} };
+}
 if (require.main === module) {
   const port = Number(process.env.PORT || 8787);
   createServer().server.listen(port, '0.0.0.0', () => {
+    startBeacon(port);
     console.log(`Painel: http://localhost:${port}`);
     for (const addresses of Object.values(os.networkInterfaces())) for (const a of addresses || []) if (a.family === 'IPv4' && !a.internal) console.log(`TV: http://${a.address}:${port}/tv`);
   });
 }
-module.exports = { createServer };
+module.exports = { createServer, startBeacon };

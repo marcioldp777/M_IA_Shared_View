@@ -1,6 +1,7 @@
-const { app, BrowserWindow, session, desktopCapturer } = require('electron');
-const { createServer } = require('./server');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain } = require('electron');
+const { createServer, startBeacon } = require('./server');
 const { createTools } = require('./tools');
+const { createInstaller } = require('./installer/main');
 let service, window, lastChoice, tools;
 // Candidatos ICE com IP real: a TV não resolve nomes mDNS (.local) e não há STUN/TURN.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
@@ -29,9 +30,12 @@ function pick(sources) {
 }
 app.whenReady().then(() => {
   const logFile = require('node:path').join(app.getPath('userData'), 'sala-tv.log');
-  service = createServer({ log: line => require('node:fs').appendFile(logFile, `${new Date().toISOString()} ${line}\n`, () => {}) });
+  service = createServer({ diagnostics: process.env.SALA_DIAGNOSTICO === '1', log: line => require('node:fs').appendFile(logFile, `${new Date().toISOString()} ${line}\n`, () => {}) });
   tools = createTools(() => window);
+  const installer = createInstaller(() => window);
+  ipcMain.on('open-installer', event => { if (event.sender === window?.webContents) installer.open(); });
   service.server.listen(8787, '0.0.0.0', () => {
+    startBeacon(8787);
     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
       try {
         // Sem áudio = nova tentativa do painel após falha do loopback: reaproveita a escolha recente.
@@ -44,13 +48,13 @@ app.whenReady().then(() => {
         callback(request.audioRequested ? { video: sources[choice], audio: 'loopback' } : { video: sources[choice] });
       } catch (_) { callback({}); }
     });
-    window = new BrowserWindow({ width: 1100, height: 900, backgroundColor: '#0b101b', webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, preload: require('node:path').join(__dirname, 'desktop-preload.js') } });
+    window = new BrowserWindow({ width: 1100, height: 900, backgroundColor: '#0b101b', title: 'M I.A. Shared View', icon: require('node:path').join(__dirname, 'assets', 'icon.png'), webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, preload: require('node:path').join(__dirname, 'desktop-preload.js') } });
     window.on('closed', () => app.quit()); // a camada de ferramentas também é uma janela
     window.loadURL('http://localhost:8787');
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith('http://localhost:8787/')) event.preventDefault(); });
   });
-  service.server.on('error', error => { require('electron').dialog.showErrorBox('Sala TV', error.message); app.quit(); });
+  service.server.on('error', error => { require('electron').dialog.showErrorBox('M I.A. Shared View', error.message); app.quit(); });
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { tools?.dispose(); if (service) { service.wss.clients.forEach(client => client.terminate()); service.server.close(); } });

@@ -41,14 +41,27 @@ test('lista de TVs, autorização na TV, retransmissão e limpeza', async () => 
 
     sender.json({ type: 'command', action: 'show' }); assert.equal((await tv.next('command')).action, 'show');
     sender.json({ type: 'command', action: 'freeze' }); assert.equal((await tv.next('command')).action, 'freeze');
+    sender.json({ type: 'hint', lowRes: true }); // só a TV pede 720p
+    tv.json({ type: 'hint', lowRes: true, decodeMs: 100 }); assert.equal((await sender.next('hint')).decodeMs, 100);
+    sender.json({ type: 'command', action: 'show' }); await tv.next('command');
+    assert.equal(await Promise.race([tv.next('hint'), Promise.resolve('nada')]), 'nada');
     tv.json({ type: 'ice', candidate: { candidate: 'candidate:1 1 udp 2122260223 0b7c2d4e-1111-2222-3333-444455556666.local 50000 typ host', sdpMid: '0', sdpMLineIndex: 0 } });
     assert.match((await sender.next('ice')).candidate.candidate, / 127\.0\.0\.1 50000 typ host$/);
 
     tv.json({ type: 'annotate', op: 'clear' }); // TV não envia anotações
     sender.json({ type: 'annotate', op: 'cursor', x: 0.5, y: 0.25 });
     assert.deepEqual(await tv.next('annotate'), { type: 'annotate', op: 'cursor', x: 0.5, y: 0.25 });
-    tv.json({ type: 'status', message: 'ok' }); await sender.next('status');
+    tv.json({ type: 'status', message: 'stats recebido 1280x720 30fps' }); // diagnóstico desligado: descartado
+    tv.json({ type: 'status', message: 'ok' }); assert.equal((await sender.next('status')).message, 'ok');
     assert.equal(await Promise.race([sender.next('annotate'), Promise.resolve('nada')]), 'nada');
+
+    extra.json({ type: 'rename', name: 'Invasor' }); // não pareado: recusado
+    assert.match((await extra.next('error')).message, /Conecte-se/);
+    sender.json({ type: 'rename', name: '  Marcio   TV ' });
+    assert.deepEqual(await tv.next('renamed'), { type: 'renamed', name: 'Marcio TV', full: 'Marcio TV (127.0.0.1)' });
+    assert.equal((await sender.next('renamed')).full, 'Marcio TV (127.0.0.1)');
+    let names;
+    do names = (await extra.next('tvs')).list.map(t => t.name); while (names[0] !== 'Marcio TV (127.0.0.1)');
 
     sender.close(); await tv.next('peer-left');
     const page = await fetch(url.replace('ws:', 'http:') + '/tv'); assert.equal(page.status, 200); assert.match(await page.text(), /Pronto para apresentar/);

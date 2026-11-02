@@ -3,6 +3,7 @@ dist/
 tv/app.js
 tv/style.css
 tv/ink.js
+tv/logo.png
 *.wgt
 .buildResult/
 *.p12
@@ -10,3 +11,10 @@ profiles.xml
 tv/author-signature.xml
 tv/signature1.xml
 tv/.manifest.tmp
+android/app/src/main/assets/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+.vscode/
+divulgacao/

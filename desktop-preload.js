@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld('salaDesktop', {
   tvState: action => ipcRenderer.send('tv-state', action),
   sharing: active => ipcRenderer.send('sharing', active),
   toolbar: visible => ipcRenderer.send('toolbar', visible),
+  openInstaller: () => ipcRenderer.send('open-installer'),
   onAnnotate: callback => ipcRenderer.on('annotate', (_, msg) => callback(msg))
 });

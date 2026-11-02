@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var role = document.body.dataset.role, socket, pc, stream, candidates = [], slides = [], slideIndex = 0;
-  var retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null;
+  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null;
   var $ = function (id) { return document.getElementById(id); };
   function load(key, fallback) { try { var value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch (_) { return fallback; } }
   function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
@@ -15,7 +15,31 @@
   }
   function status(message) { $('status').textContent = message; if (message) send({ type: 'status', message: message }); }
   function send(data) { if (socket && socket.readyState === 1) socket.send(JSON.stringify(data)); }
-  function cleanup() { if (pc) pc.close(); pc = null; candidates = []; }
+  function cleanup() { clearInterval(statsTimer); if (pc) pc.close(); pc = null; candidates = []; lastDecode = null; slowHinted = false; lowRes = false; }
+  // Diagnóstico de fluidez: a cada 5 s, estatísticas do vídeo vão para o log do app Windows.
+  var statsTimer, lastDecode = null, slowHinted = false, lowRes = false, SLOW_DECODE_MS = 60;
+  function reportStats(peer) {
+    peer.getStats().then(function (report) {
+      report.forEach(function (s) {
+        if (s.kind !== 'video' || (s.type !== 'inbound-rtp' && s.type !== 'outbound-rtp')) return;
+        var parts = ['stats', s.type === 'inbound-rtp' ? 'recebido' : 'enviado', (s.frameWidth || 0) + 'x' + (s.frameHeight || 0), Math.round(s.framesPerSecond || 0) + 'fps'];
+        if (s.type === 'inbound-rtp') {
+          parts.push('descartados=' + (s.framesDropped || 0), 'perdidos=' + (s.packetsLost || 0), 'decoder=' + (s.decoderImplementation || '?'));
+          // Tempo médio de decodificação nos últimos 5 s; aparelho lento pede 720p ao PC (uma vez por conexão).
+          if (lastDecode && s.framesDecoded > lastDecode.frames) {
+            var decodeMs = Math.round(1000 * (s.totalDecodeTime - lastDecode.time) / (s.framesDecoded - lastDecode.frames));
+            parts.push('decode=' + decodeMs + 'ms');
+            if (decodeMs > SLOW_DECODE_MS && s.frameHeight > 800 && !slowHinted) { slowHinted = true; send({ type: 'hint', lowRes: true, decodeMs: decodeMs }); }
+          }
+          lastDecode = { time: s.totalDecodeTime || 0, frames: s.framesDecoded || 0 };
+          if (s.jitterBufferEmittedCount) parts.push('buffer=' + Math.round(1000 * s.jitterBufferDelay / s.jitterBufferEmittedCount) + 'ms');
+        } else {
+          parts.push('limite=' + (s.qualityLimitationReason || '?'), 'encoder=' + (s.encoderImplementation || '?'), 'kbps=' + Math.round((s.targetBitrate || 0) / 1000));
+        }
+        send({ type: 'status', message: parts.join(' ') });
+      });
+    }).catch(function () {});
+  }
   function stop() {
     if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
     stream = null;
@@ -33,10 +57,16 @@
     pc.onconnectionstatechange = function () {
       if (!pc) return;
       send({ type: 'status', message: 'webrtc ' + pc.connectionState + ' / ice ' + pc.iceConnectionState });
-      if (pc.connectionState === 'connected') status(role === 'tv' ? '' : 'Transmitindo para a TV.');
+      if (pc.connectionState === 'connected') {
+        status(role === 'tv' ? '' : 'Transmitindo para a TV.');
+        var peer = pc; clearInterval(statsTimer); statsTimer = setInterval(function () { reportStats(peer); }, 5000);
+      }
       if (pc.connectionState === 'failed') status('Falha na conexão de mídia. Verifique isolamento Wi-Fi/firewall e tente compartilhar novamente.');
     };
     pc.ontrack = function (e) {
+      // Rede local sem perdas: buffer mínimo corta ~100 ms de atraso (jitterBufferTarget em ms; playoutDelayHint em s, versões antigas).
+      if ('jitterBufferTarget' in e.receiver) e.receiver.jitterBufferTarget = 0;
+      else if ('playoutDelayHint' in e.receiver) e.receiver.playoutDelayHint = 0;
       $('welcome').hidden = true; $('slide').hidden = true; $('screen').hidden = false;
       $('screen').srcObject = e.streams[0]; play();
     };
@@ -51,12 +81,14 @@
     });
   }
   // Rede local: banda folgada e prioridade para manter 30 quadros/s.
+  // lowRes: TV lenta para decodificar 1080p -> envia em 720p (1920/1.5) com menos banda.
   async function tune(peer) {
     for (var sender of peer.getSenders()) {
       if (!sender.track || sender.track.kind !== 'video') continue;
       var params = sender.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings[0].maxBitrate = 8000000; params.encodings[0].maxFramerate = 30;
+      params.encodings[0].maxBitrate = lowRes ? 5000000 : 8000000; params.encodings[0].maxFramerate = 30;
+      params.encodings[0].scaleResolutionDownBy = lowRes ? 1.5 : 1;
       params.degradationPreference = 'maintain-framerate';
       try { await sender.setParameters(params); } catch (_) {}
     }
@@ -101,13 +133,14 @@
     clearTimeout(retryTimer); clearTimeout(connectTimer);
     if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.onopen = null; }
     if (socket) socket.close();
+    currentBase = base; connected = false;
     socket = new WebSocket(base.replace(/^http/, 'ws').replace(/\/$/, ''));
     if (role === 'tv') status('Conectando ao computador em ' + base + '…');
     connectTimer = setTimeout(function () { if (socket && socket.readyState === 0) socket.close(); }, 8000);
-    socket.onopen = function () { clearTimeout(connectTimer); send(role === 'tv' ? { type: 'join', role: 'tv', id: tvId, name: tvName } : { type: 'join', role: 'sender' }); };
+    socket.onopen = function () { clearTimeout(connectTimer); connected = true; send(role === 'tv' ? { type: 'join', role: 'tv', id: tvId, name: tvName } : { type: 'join', role: 'sender' }); };
     socket.onerror = function () { status('Não foi possível conectar. Confira o endereço e o servidor.'); };
     socket.onclose = function () {
-      clearTimeout(connectTimer);
+      clearTimeout(connectTimer); connected = false;
       stop();
       if (role === 'sender') {
         if (desktop) desktop.sharing(false);
@@ -117,7 +150,7 @@
       } else {
         command('stop'); // volta para a tela inicial, senão o último vídeo cobre a tela de espera
         showAuth(null); $('setup').hidden = false; $('tvName').textContent = '';
-        status('Sem conexão com ' + base + '. Abra o Sala TV no Windows. Nova tentativa em 5 segundos.');
+        status('Sem conexão com ' + base + '. Abra o M I.A. Shared View no Windows. Nova tentativa em 5 segundos.');
         retryTimer = setTimeout(function () { connect(base); }, 5000);
       }
     };
@@ -129,7 +162,11 @@
         if (msg.type === 'waiting') status('Confirme o acesso no controle remoto da TV ' + msg.name + '…');
         if (msg.type === 'joined') {
           if (role === 'tv') { $('tvName').textContent = msg.name; $('setup').hidden = true; status('Aguardando um computador…'); }
-          else { $('controls').hidden = false; status('Conectado a ' + msg.name + '. Escolha o conteúdo.'); }
+          else { $('controls').hidden = false; $('tvNewName').value = msg.name.replace(/ \([\d.]+\)$/, ''); status('Conectado a ' + msg.name + '. Escolha o conteúdo.'); }
+        }
+        if (msg.type === 'renamed') {
+          if (role === 'tv') { tvName = msg.name; save('sala-tv-name', tvName); $('tvName').textContent = msg.full; }
+          else { $('tvNewName').value = msg.name; status('TV renomeada para ' + msg.name + '.'); }
         }
         if (msg.type === 'left') { $('controls').hidden = true; status('Desconectado da TV.'); }
         if (msg.type === 'auth-request' && role === 'tv') {
@@ -151,6 +188,10 @@
           await pc.setRemoteDescription(msg.description); await tune(pc);
           for (var candidate of candidates) await pc.addIceCandidate(candidate); candidates = [];
         }
+        if (msg.type === 'hint' && role === 'sender' && pc && msg.lowRes && !lowRes) {
+          lowRes = true; await tune(pc);
+          status('Transmitindo em 720p: a TV demora para decodificar 1080p (' + msg.decodeMs + ' ms), assim o atraso diminui.');
+        }
         if (msg.type === 'ice') { if (pc && pc.remoteDescription) await pc.addIceCandidate(msg.candidate); else candidates.push(msg.candidate); }
         if (msg.type === 'command' && role === 'tv') command(msg.action);
         if (msg.type === 'annotate' && role === 'tv' && ink) { if (msg.op === 'zoom') zoomTo(msg.rect); else ink.handle(msg); }
@@ -164,6 +205,9 @@
     var tvId = load('sala-tv-id', '') || randomId(), trusted = load('sala-trusted', {}), tvName = 'Samsung TV';
     save('sala-tv-id', tvId);
     try { tvName = tizen.systeminfo.getCapability('http://tizen.org/system/model_name') || tvName; } catch (_) {}
+    // App Android (Fire TV, Android TV, TV Box): nome do aparelho, botão Voltar e descoberta do computador.
+    if (typeof SalaAndroid !== 'undefined') { tvName = 'Android TV'; try { tvName = SalaAndroid.deviceName() || tvName; } catch (_) {} }
+    tvName = load('sala-tv-name', '') || tvName; // nome dado pelo painel (Renomear TV)
     // msg null fecha o pedido; a resposta fica lembrada pelo token do computador.
     var showAuth = function (msg) {
       pendingAuth = msg; $('auth').hidden = !msg;
@@ -177,7 +221,19 @@
     $('allow').onclick = function () { answerAuth(true); };
     $('deny').onclick = function () { answerAuth(false); };
     $('forget').onclick = function () { trusted = {}; save('sala-trusted', trusted); status('Computadores autorizados foram esquecidos.'); };
-    document.addEventListener('keydown', function (e) { if (e.keyCode === 10009 && pendingAuth) answerAuth(false); });
+    // Voltar: recusa um pedido aberto; senão, sai só se apertado de novo em até 2 s. false = pode sair.
+    var backAt = 0, backMessage = 'Pressione Voltar novamente para sair.';
+    var back = function () {
+      if (pendingAuth) { answerAuth(false); return true; }
+      if (Date.now() - backAt < 2000) return false;
+      backAt = Date.now(); status(backMessage);
+      setTimeout(function () { if ($('status').textContent === backMessage) status(''); }, 2000);
+      return true;
+    };
+    document.addEventListener('keydown', function (e) {
+      if (e.keyCode !== 10009 || back()) return; // 10009 = Voltar no controle Samsung
+      try { tizen.application.getCurrentApplication().exit(); } catch (_) {}
+    });
     if (typeof SalaInk !== 'undefined') {
       ink = SalaInk($('ink'), frame, { video: $('screen'), pointer: true });
       addEventListener('resize', layout); $('screen').addEventListener('resize', layout);
@@ -198,12 +254,22 @@
       var media = $('screen').srcObject;
       if (media) media.getTracks().forEach(function (t) { t.enabled = !document.hidden; });
     });
+    if (typeof window !== 'undefined') {
+      window.salaBack = back; // app Android: o botão Voltar nativo pergunta aqui antes de fechar
+      // Anúncio UDP do app Windows: troca de endereço só se ainda não estiver conectado (ex.: IP do PC mudou).
+      window.salaDiscovered = function (url) {
+        if (connected || (url === currentBase && socket && socket.readyState === 0)) return;
+        $('server').value = url;
+        try { localStorage.setItem('sala-server', url); } catch (_) {}
+        connect(url);
+      };
+    }
     if (initialServer) connect(initialServer);
   } else {
     var renderTvs = function () {
       var box = $('tvs'), paired = tvList.some(function (tv) { return tv.mine; });
       box.textContent = '';
-      if (!tvList.length) { box.textContent = 'Nenhuma TV encontrada. Abra o Sala TV na TV.'; return; }
+      if (!tvList.length) { box.textContent = 'Nenhuma TV encontrada. Abra o M I.A. Shared View na TV.'; return; }
       tvList.forEach(function (tv) {
         var button = document.createElement('button');
         button.className = tv.mine ? '' : 'secondary';
@@ -219,11 +285,15 @@
         box.appendChild(button);
       });
     };
+    $('renameTv').onclick = function () { send({ type: 'rename', name: $('tvNewName').value }); };
+    $('tvNewName').onkeydown = function (e) { if (e.key === 'Enter') $('renameTv').onclick(); };
     $('leave').onclick = function () { endShare(); send({ type: 'command', action: 'stop' }); send({ type: 'leave' }); };
     // Ferramentas (só no app Windows): o processo principal desenha sobre o app compartilhado e manda os eventos para cá.
     var desktop = window.salaDesktop;
     var endShare = function () { stop(); if (desktop) desktop.sharing(false); };
     if (desktop) {
+      $('openInstaller').hidden = false;
+      $('openInstaller').onclick = function () { desktop.openInstaller(); };
       $('tools').hidden = false;
       document.querySelectorAll('[data-tool]').forEach(function (button) { button.onclick = function () { desktop.setTool(button.dataset.tool); }; });
       $('clearInk').onclick = function () { desktop.clear(); };
