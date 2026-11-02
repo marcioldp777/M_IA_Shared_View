@@ -1,0 +1,32 @@
+{
+  "name": "samsung_compartilhamento_tela",
+  "version": "1.0.0",
+  "description": "Apresentacao local com receptor Samsung Tizen e WebRTC",
+  "main": "desktop.js",
+  "scripts": {
+    "test": "node --test",
+    "start": "node server.js",
+    "prepare:tv": "node scripts/prepare-tv.js",
+    "desktop": "electron .",
+    "build:windows": "electron-builder --win portable"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "koffi": "^2.16.3",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "local.sala.tv",
+    "productName": "Sala TV",
+    "win": {
+      "target": "portable"
+    }
+  }
+}
