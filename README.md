@@ -83,8 +83,8 @@ Requer [Node.js](https://nodejs.org) 20+ e npm.
 > Instalar o receptor nas TVs envolve ativar o **modo desenvolvedor** e instalar apps **fora das lojas oficiais**. Faça isso **por sua conta e risco**, apenas em aparelhos seus ou que você tenha autorização para configurar. Leia [Aviso legal e responsabilidade](#aviso-legal-e-responsabilidade) antes de continuar.
 
 ```bash
-git clone https://github.com/marcioldp777/samsung_Shared_View.git
-cd samsung_Shared_View
+git clone https://github.com/marcioldp777/M_IA_Shared_View.git
+cd M_IA_Shared_View
 npm install
 npm test
 ```
