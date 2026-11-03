@@ -1,6 +1,6 @@
 {
   "name": "samsung_compartilhamento_tela",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "M I.A. Shared View: apresentação na TV pela rede local (Samsung Tizen e Android TV) com WebRTC",
   "main": "desktop.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "start": "node server.js",
     "prepare:tv": "node scripts/prepare-tv.js",
     "desktop": "electron .",
-    "build:windows": "electron-builder --win portable",
+    "build:windows": "electron-builder --win nsis portable",
+    "build:installer": "electron-builder --win nsis",
     "build:android": "node scripts/build-android.js"
   },
   "keywords": [],
@@ -28,8 +29,23 @@
     "appId": "local.sala.tv",
     "productName": "M I.A. Shared View",
     "win": {
-      "target": "portable",
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "M I.A. Shared View Portable ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "M I.A. Shared View",
+      "artifactName": "M I.A. Shared View Setup ${version}.${ext}"
     },
     "executableName": "Sala TV",
     "files": [
@@ -37,6 +53,7 @@
       "desktop.js",
       "server.js",
       "tools.js",
+      "discovery.js",
       "*-preload.js",
       "installer/**",
       "public/**",

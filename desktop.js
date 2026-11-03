@@ -1,7 +1,7 @@
 const { app, BrowserWindow, session, desktopCapturer, ipcMain } = require('electron');
 const { createServer, startBeacon } = require('./server');
 const { createTools } = require('./tools');
-const { createInstaller } = require('./installer/main');
+const discovery = require('./discovery');
 let service, window, lastChoice, tools;
 // Candidatos ICE com IP real: a TV não resolve nomes mDNS (.local) e não há STUN/TURN.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
@@ -32,8 +32,15 @@ app.whenReady().then(() => {
   const logFile = require('node:path').join(app.getPath('userData'), 'sala-tv.log');
   service = createServer({ diagnostics: process.env.SALA_DIAGNOSTICO === '1', log: line => require('node:fs').appendFile(logFile, `${new Date().toISOString()} ${line}\n`, () => {}) });
   tools = createTools(() => window);
-  const installer = createInstaller(() => window);
-  ipcMain.on('open-installer', event => { if (event.sender === window?.webContents) installer.open(); });
+  // Busca por IP/faixa: lista as TVs Samsung; ao escolher uma, abre o receptor nela apontando para este PC.
+  const launchTv = discovery.createLauncher(require('node:path').join(app.getPath('userData'), 'tv-tokens.json'), 8787);
+  ipcMain.handle('search-tvs', (event, text) => {
+    if (event.sender !== window?.webContents) return null;
+    const progress = data => { if (!event.sender.isDestroyed()) event.sender.send('search-progress', data); };
+    return discovery.search(text, { onFound: tv => progress({ found: tv }), onProgress: (done, total) => progress({ done, total }) })
+      .then(found => ({ ok: true, found }), error => ({ ok: false, message: error.message }));
+  });
+  ipcMain.handle('launch-tv', (event, ip) => (event.sender === window?.webContents && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? launchTv(ip) : null));
   service.server.listen(8787, '0.0.0.0', () => {
     startBeacon(8787);
     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
@@ -54,7 +61,11 @@ app.whenReady().then(() => {
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith('http://localhost:8787/')) event.preventDefault(); });
   });
-  service.server.on('error', error => { require('electron').dialog.showErrorBox('M I.A. Shared View', error.message); app.quit(); });
+  service.wss.on('error', () => {}); // o ws repassa o erro do servidor HTTP, já tratado abaixo
+  service.server.on('error', error => {
+    const message = error.code === 'EADDRINUSE' ? 'O M I.A. Shared View já está aberto neste computador (porta 8787 em uso). Feche a outra janela e abra de novo.' : error.message;
+    require('electron').dialog.showErrorBox('M I.A. Shared View', message); app.quit();
+  });
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { tools?.dispose(); if (service) { service.wss.clients.forEach(client => client.terminate()); service.server.close(); } });

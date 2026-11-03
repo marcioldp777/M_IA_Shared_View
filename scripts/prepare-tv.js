@@ -5,4 +5,6 @@ for (const name of ['app.js', 'style.css', 'ink.js', 'logo.png']) fs.copyFileSyn
 const assets = path.join(__dirname, '../android/app/src/main/assets');
 fs.mkdirSync(assets, { recursive: true });
 for (const name of ['index.html', 'app.js', 'style.css', 'ink.js', 'logo.png']) fs.copyFileSync(path.join(__dirname, '../tv', name), path.join(assets, name));
-console.log('Receptor preparado em tv/ (Tizen) e android/app/src/main/assets (Android).');
+// App LG webOS: mesmo receptor; appinfo.json e ícones ficam versionados em webos/.
+for (const name of ['index.html', 'app.js', 'style.css', 'ink.js', 'logo.png']) fs.copyFileSync(path.join(__dirname, '../tv', name), path.join(__dirname, '../webos', name));
+console.log('Receptor preparado em tv/ (Tizen), android/app/src/main/assets (Android) e webos/ (LG).');

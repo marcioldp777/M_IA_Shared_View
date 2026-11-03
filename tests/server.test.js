@@ -67,3 +67,34 @@ test('lista de TVs, autorização na TV, retransmissão e limpeza', async () => 
     const page = await fetch(url.replace('ws:', 'http:') + '/tv'); assert.equal(page.status, 200); assert.match(await page.text(), /Pronto para apresentar/);
   } finally { clients.forEach(ws => ws.terminate()); await new Promise(resolve => wss.close(resolve)); await new Promise(resolve => server.close(resolve)); }
 });
+
+test('ping identifica o app e TV apresentando para outro PC aparece em uso', async () => {
+  const { server } = createServer({ host: 'PC-TESTE' });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const base = `127.0.0.1:${server.address().port}`;
+  const opened = [];
+  const open = async () => { const ws = new WebSocket(`ws://${base}`); opened.push(ws); await once(ws, 'open'); return ws; };
+  try {
+    const res = await fetch(`http://${base}/ping`);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assert.deepEqual(await res.json(), { app: 'sala-tv', host: 'PC-TESTE' });
+
+    const tv = await open();
+    tv.send(JSON.stringify({ type: 'join', role: 'tv', id: 'tv-0000-0002', name: 'Sala' }));
+    const [joined] = await once(tv, 'message');
+    assert.equal(JSON.parse(joined).ip, '127.0.0.1');
+    const sender = await open();
+    const lists = [];
+    sender.on('message', raw => { const msg = JSON.parse(raw); if (msg.type === 'tvs') lists.push(msg.list); });
+    sender.send(JSON.stringify({ type: 'join', role: 'sender' }));
+    while (!lists.length) await once(sender, 'message');
+    assert.equal(lists.at(-1)[0].busy, false);
+    tv.send(JSON.stringify({ type: 'presence', busy: true }));
+    while (!lists.at(-1)[0].busy) await once(sender, 'message');
+    sender.send(JSON.stringify({ type: 'request', tv: 'tv-0000-0002', token: 'token-qualquer-0001', name: 'PC' }));
+    let error;
+    sender.on('message', raw => { const msg = JSON.parse(raw); if (msg.type === 'error') error = msg; });
+    while (!error) await once(sender, 'message');
+    assert.match(error.message, /em uso/);
+  } finally { opened.forEach(ws => ws.terminate()); server.close(); }
+});

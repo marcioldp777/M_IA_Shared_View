@@ -1,0 +1,12 @@
+{
+  "id": "com.mia.sharedview",
+  "version": "1.2.0",
+  "vendor": "M I.A. Solutions",
+  "type": "web",
+  "main": "index.html",
+  "title": "M I.A. Shared View",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}

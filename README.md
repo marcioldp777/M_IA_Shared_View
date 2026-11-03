@@ -27,7 +27,7 @@ O **M I.A. Shared View** transforma qualquer Smart TV compatível em uma tela de
 
 - **Tela inteira ou uma janela**, com seletor de miniaturas e **áudio do sistema**.
 - **Pareamento seguro**: lista de TVs na rede, aprovação no controle remoto e autorização lembrada (token exclusivo por TV). Uma TV em uso não aceita outro computador.
-- **Descoberta automática**: o app Windows se anuncia na rede e os receptores Android encontram o computador sozinhos.
+- **Descoberta automática, sem IP na TV**: a TV procura sozinha os computadores com o app aberto e fica disponível para todos ao mesmo tempo — um apresenta por vez, nos outros ela aparece "em uso". Os receptores Android também ouvem o anúncio UDP do app Windows.
 - **Ferramentas de apresentação sobre qualquer app**: apontador, caneta, marca-texto, caneta laser, formas, borracha, desfazer, lupa, holofote, zoom por seleção, quadro branco/preto e congelar imagem — com 6 cores e 3 espessuras.
 - **Caixa flutuante** sempre visível sobre os apps (e invisível na TV), com controles da TV e cronômetro.
 - **Qualidade adaptativa**: H.264 por hardware; aparelhos que decodificam 1080p devagar pedem 720p automaticamente.
@@ -53,18 +53,21 @@ O **M I.A. Shared View** transforma qualquer Smart TV compatível em uma tela de
 | Transmissor (Windows) | Electron + Node.js | Windows 10/11 |
 | Receptor Samsung | App web Tizen (`.wgt`) | Tizen 5.5 (declarado em `tv/config.xml`) |
 | Receptor Android | App Android (APK) | Android 5.1 (API 22) |
+| Receptor LG | App web webOS (`.ipk`) | webOS TV (testado no 8.3) |
 
 ### Modelos testados
 
 | Aparelho | Sistema | Resultado |
 |---|---|---|
-| Samsung **UN70DU8000GXZD** (série DU8000, 2024) | **Tizen 9.0** | ✅ instalação via Tizen Studio/linha de comando, imagem, áudio, anotações e autorização · assistente de instalação: em validação |
+| Samsung **UN70DU8000GXZD** (série DU8000, 2024) | **Tizen 9.0** | ✅ instalação via Tizen Studio/linha de comando, imagem, áudio, anotações e autorização |
+| Samsung **LH55BEFH4GGXZD** (Business TV, série BEF) | **Tizen 9.0** | ✅ instalação via linha de comando, descoberta por varredura e conexão com vários computadores · acesso remoto da Samsung (porta 8002) bloqueado pelo aparelho |
+| LG **50UR871C0SA** (série UR871C, 2023) | **webOS 8.3** | ✅ instalação via webOS CLI, descoberta por varredura e conexão · transmissão: em validação |
 | Amazon **Fire TV Stick** (modelo AFTSS) | **Fire OS 7 / Android 9** (API 28) | ✅ imagem, áudio e anotações; 720p automático |
-| PC com **Windows 11** | — | ✅ transmissor, ferramentas e assistente de instalação |
+| PC com **Windows 11** | — | ✅ transmissor, ferramentas e instalador |
 
 A versão do Tizen depende do ano do modelo e das atualizações de firmware da Samsung (a TV testada, de 2024, já estava no Tizen 9.0). O receptor usa WebRTC e recursos do navegador interno da TV, que variam entre versões — **modelos e versões não listados não foram testados**. Relatos de outros aparelhos são bem-vindos nas *issues*.
 
-O receptor é o **mesmo código web** (`public/app.js`, `public/ink.js`) nas duas plataformas de TV.
+O receptor é o **mesmo código web** (`public/app.js`, `public/ink.js`) em todas as plataformas de TV.
 
 ## Como funciona
 
@@ -73,7 +76,8 @@ O receptor é o **mesmo código web** (`public/app.js`, `public/ink.js`) nas dua
 - **Sinalização** por WebSocket (`server.js`): lista de TVs, autorização, comandos e anotações.
 - **Mídia** por WebRTC ponto a ponto, preferindo H.264. Os candidatos ICE mDNS (`*.local`) das TVs são reescritos com o IP real pelo servidor, para conectar sem STUN/TURN.
 - **Anotações**: uma janela transparente no Windows, excluída da captura (`setContentProtection`), recebe os traços; a posição da janela compartilhada vem da API Win32 via [koffi](https://koffi.dev). Os traços trafegam em coordenadas normalizadas e a TV os redesenha por cima do vídeo.
-- **Descoberta**: anúncio UDP na porta 8788 a cada 2 s.
+- **Descoberta**: a TV não pode abrir portas na rede, então é ela quem procura. A cada 30 s ela varre as sub-redes /24 que já conhece (a dela, a dos computadores já vistos e o `data-server` gravado na instalação) e as faixas cadastradas uma vez (`data-ranges` na instalação ou o campo "Faixa de rede dos computadores" na tela da TV), chamando `http://IP:8787/ping`. Ela se conecta a **todos** os computadores encontrados; a conexão ativa é a do que pediu acesso, e os demais recebem `presence` para mostrar a TV em uso. Os receptores Android também ouvem o anúncio UDP na porta 8788.
+- **Busca no painel** ("Buscar TV por IP ou faixa"): lista as TVs Samsung pela API da porta 8001 e, se a TV permitir o acesso de dispositivos externos (porta 8002), abre o receptor nela já apontando para o computador.
 
 ## Instalação
 
@@ -92,10 +96,11 @@ npm test
 ### 1. Windows
 
 ```bash
-npm run build:windows      # gera dist/win-unpacked/Sala TV.exe e o portátil em dist/
+npm run build:windows      # gera em dist/ o instalador (Setup) e o portátil
+npm run build:installer    # só o instalador
 ```
 
-Abra `dist/win-unpacked/Sala TV.exe`. O app sobe o servidor na porta **TCP 8787**; permita o acesso na **rede privada** quando o Windows perguntar. Para desenvolver sem empacotar: `npm run desktop`.
+Execute `dist/M I.A. Shared View Setup 1.0.0.exe` para instalar (permite escolher a pasta e cria atalhos na Área de Trabalho e no Menu Iniciar) ou use o portátil `dist/M I.A. Shared View Portable 1.0.0.exe`, que roda sem instalar. O app sobe o servidor na porta **TCP 8787**; permita o acesso na **rede privada** quando o Windows perguntar. Para desenvolver sem empacotar: `npm run desktop`.
 
 ### 2. Receptor Android (Fire TV, Android TV, Google TV, TV Box)
 
@@ -117,26 +122,15 @@ O app encontra o computador sozinho na rede.
 
 ### 3. Receptor Samsung (Tizen)
 
-> Testado apenas na Samsung **UN70DU8000GXZD** com **Tizen 9.0**. Em outros modelos e versões do Tizen a instalação ou o funcionamento podem ser diferentes. Use por sua conta e risco.
+> Testado nas Samsung **UN70DU8000GXZD** e **LH55BEFH4GGXZD**, ambas com **Tizen 9.0**. Em outros modelos e versões do Tizen a instalação ou o funcionamento podem ser diferentes. Use por sua conta e risco.
 
 > **Particularidade da Samsung:** diferente do Android, uma TV Samsung só instala apps próprios assinados com certificados emitidos pela Samsung. É preciso ter uma **conta Samsung**, gerar no Tizen Studio (Certificate Manager) um **certificado de autor** e um **certificado de distribuidor**, e incluir neste último o **DUID** (identificador único) de cada TV. Cada TV nova precisa entrar no certificado e o app precisa ser assinado de novo.
 
 **Antes (uma vez):** instale o [Tizen Studio](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/installing-tv-sdk.html) com a extensão *Samsung Certificate* e crie, no **Certificate Manager**, um perfil Samsung (autor + distribuidor) que inclua o DUID da sua TV ([guia oficial](https://developer.samsung.com/smarttv/develop/getting-started/using-sdk/tv-device.html)).
 
-#### Opção 1 — Assistente "Instalar na TV Samsung" (recomendado)
+**Instalação pela linha de comando do Tizen:**
 
-No app Windows, clique em **"Instalar na TV Samsung…"** (seção *01 · Escolha a TV*). O assistente:
-
-1. procura as TVs Samsung na rede e mostra se o **modo desenvolvedor** está ligado e apontando para este PC (com o passo a passo e o IP já preenchido, se não estiver);
-2. lê o **DUID** da TV e confere se ele está no seu certificado de distribuidor;
-3. usa o perfil do Tizen Studio (pede a senha do certificado; opcionalmente lembra, protegida pelo Windows);
-4. monta o app já apontando para este PC, **assina** e **instala**, e abre o app na TV.
-
-A assinatura é feita pelo próprio app (sem chamar o Tizen Studio); do Tizen Studio são usados apenas o `sdb` e o seu perfil de certificado.
-
-#### Opção 2 — Linha de comando do Tizen
-
-1. Em `tv/index.html`, ajuste `data-server` para o endereço do seu computador (ex.: `http://192.168.0.10:8787`). Também dá para digitar o endereço na própria TV.
+1. Em `tv/index.html`, preencha `data-server` com o endereço de um computador (ex.: `http://192.168.0.10:8787`) e, se os computadores ficam em outras sub-redes, `data-ranges` com as faixas (ex.: `192.168.10.0/24, 192.168.20.0/24`). Isso só dá à TV os pontos de partida da busca: depois ela acha sozinha qualquer computador nessas redes. As faixas também podem ser digitadas uma vez na tela da TV.
 2. Empacote, instale e abra:
    ```bash
    npm run prepare:tv
@@ -146,6 +140,24 @@ A assinatura é feita pelo próprio app (sem chamar o Tizen Studio); do Tizen St
    ```
 
 > Não versione certificados, perfis ou senhas (`*.p12`, `profiles.xml` já estão no `.gitignore`).
+
+### 4. Receptor LG (webOS)
+
+> Testado apenas na LG **50UR871C0SA** com **webOS 8.3**. Use por sua conta e risco.
+
+**Antes (uma vez):** crie uma conta gratuita em [webOS TV Developer](https://webostv.developer.lge.com), instale na TV o app **Developer Mode** (LG Content Store), entre com a conta, ligue **Dev Mode Status** (a TV reinicia) e depois **Key Server**. Instale a CLI: `npm install -g @webos-tools/cli`.
+
+```bash
+npm run prepare:tv                       # copia o receptor para webos/
+ares-setup-device --add lgtv -i "{\"host\":\"IP-DA-TV\",\"port\":9922,\"username\":\"prisoner\"}"
+ares-novacom --device lgtv --getkey      # pede a passphrase mostrada no Developer Mode
+ares-setup-device --modify lgtv -i "{\"privatekey\":\"lgtv_webos\",\"passphrase\":\"PASSPHRASE\"}"
+ares-package webos -o dist               # ajuste data-server/data-ranges em webos/index.html antes, como na Samsung
+ares-install --device lgtv dist/com.mia.sharedview_1.2.0_all.ipk
+ares-launch --device lgtv com.mia.sharedview
+```
+
+> **Particularidade da LG:** a sessão do modo desenvolvedor expira em **50 horas** e, ao expirar, a LG remove o app. Renove pelo botão **Extend** no Developer Mode ou com `ares-extend-dev --device lgtv`.
 
 ## Uso
 
@@ -183,11 +195,12 @@ Na TV: **OK** autoriza a reprodução se necessário; **Voltar duas vezes** sai 
 | `npm start` | Servidor e páginas sem Electron (porta 8787) |
 | `npm run desktop` | App Windows em modo desenvolvimento |
 | `npm test` | Testes (`node:test`): servidor, receptor e renderizador de anotações |
-| `npm run prepare:tv` | Copia o receptor para `tv/` e para os assets do Android |
-| `npm run build:windows` | Executável Windows (electron-builder) |
+| `npm run prepare:tv` | Copia o receptor para `tv/` (Samsung), `webos/` (LG) e os assets do Android |
+| `npm run build:windows` | Instalador e executável portátil do Windows (electron-builder) |
+| `npm run build:installer` | Só o instalador do Windows |
 | `npm run build:android` | APK Android |
 
-Estrutura: `server.js` (sinalização), `desktop.js` / `tools.js` (Electron, ferramentas, caixa flutuante), `public/` (painel, receptor, anotações), `tv/` (Tizen), `android/` (app Android).
+Estrutura: `server.js` (sinalização), `desktop.js` / `tools.js` (Electron, ferramentas, caixa flutuante), `discovery.js` (busca de TVs Samsung por IP/faixa), `public/` (painel, receptor, anotações), `tv/` (Tizen), `webos/` (LG), `android/` (app Android).
 
 ## Segurança e limites
 

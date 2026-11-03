@@ -44,7 +44,7 @@ test('receptor conecta sozinho, pede autorização uma vez e depois lembra', asy
   assert.equal(last('auth-response').allow, true); assert.equal(element('auth').hidden, true);
 });
 
-test('app Android: nome do aparelho, Voltar recusa pedido e descoberta troca o endereço', async () => {
+test('app Android: nome do aparelho, Voltar recusa pedido e anúncio acrescenta computadores', async () => {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, { value: '', textContent: '', hidden: false, focus() {} });
@@ -72,12 +72,11 @@ test('app Android: nome do aparelho, Voltar recusa pedido e descoberta troca o e
   window.salaDiscovered('http://192.168.1.20:8787');
   const second = sockets[sockets.length - 1];
   assert.equal(second.url, 'ws://192.168.1.20:8787');
-  assert.equal(element('server').value, 'http://192.168.1.20:8787');
   second.readyState = 1; second.onopen();
   assert.equal(second.sent.find(m => m.type === 'join').name, 'Fire TV da Sala');
 
-  window.salaDiscovered('http://192.168.1.30:8787'); // já conectado: ignora
-  assert.equal(sockets.length, 2); // o endereço salvo e o descoberto; nenhum novo
+  window.salaDiscovered('http://192.168.1.20:8787'); // já no saguão: ignora
+  assert.equal(sockets.length, 2);
 
   await second.onmessage({ data: JSON.stringify({ type: 'auth-request', token: 'token-do-pc-000001', name: 'PC' }) });
   assert.equal(window.salaBack(), true); // com pedido aberto: só recusa
@@ -86,4 +85,51 @@ test('app Android: nome do aparelho, Voltar recusa pedido e descoberta troca o e
   assert.equal(window.salaBack(), true); // 1º Voltar: avisa
   assert.equal(element('status').textContent, 'Pressione Voltar novamente para sair.');
   assert.equal(window.salaBack(), false); // 2º em seguida: pode sair
+});
+
+test('TV fica ligada a vários computadores e atende um por vez', async () => {
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { value: '', textContent: '', hidden: false, focus() {} });
+    return elements.get(id);
+  };
+  const sockets = [];
+  class FakeSocket {
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; sockets.push(this); }
+    send(raw) { this.sent.push(JSON.parse(raw)); }
+    close() { this.readyState = 3; }
+  }
+  const window = {};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../public/app.js'), 'utf8'), {
+    window,
+    document: { body: { dataset: { role: 'tv', server: 'http://10.0.1.5:8787' } }, getElementById: element, addEventListener() {} },
+    location: { protocol: 'file:', port: '' },
+    localStorage: { getItem() { return null; }, setItem() {} },
+    WebSocket: FakeSocket, setTimeout() { return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}, Uint8Array, Math, JSON, Date, Promise
+  });
+  window.salaDiscovered('http://10.0.2.9:8787');
+  const [a, b] = sockets;
+  assert.equal(sockets.length, 2);
+  for (const ws of [a, b]) { ws.onopen(); assert.equal(ws.sent[0].role, 'tv'); }
+  await a.onmessage({ data: JSON.stringify({ type: 'joined', name: 'TV (10.0.1.50)', ip: '10.0.1.50' }) });
+  await b.onmessage({ data: JSON.stringify({ type: 'joined', name: 'TV (10.0.1.50)', ip: '10.0.1.50' }) });
+  assert.equal(element('status').textContent, 'Disponível para 2 computadores. Aguardando…');
+
+  // PC A pede acesso e apresenta; B passa a ver a TV em uso e é recusado se pedir.
+  await a.onmessage({ data: JSON.stringify({ type: 'auth-request', token: 'token-do-pc-a-000001', name: 'PC-A' }) });
+  element('allow').onclick();
+  assert.equal(a.sent.pop().allow, true);
+  await a.onmessage({ data: JSON.stringify({ type: 'peer-ready' }) });
+  assert.deepEqual(b.sent.pop(), { type: 'presence', busy: true });
+  await b.onmessage({ data: JSON.stringify({ type: 'auth-request', token: 'token-do-pc-b-000001', name: 'PC-B' }) });
+  assert.equal(b.sent.pop().allow, false);
+  assert.equal(element('authName').textContent, 'PC-A');
+
+  // A sai: B volta a poder usar a TV.
+  await a.onmessage({ data: JSON.stringify({ type: 'peer-left' }) });
+  assert.deepEqual(b.sent.pop(), { type: 'presence', busy: false });
+  await b.onmessage({ data: JSON.stringify({ type: 'auth-request', token: 'token-do-pc-b-000001', name: 'PC-B' }) });
+  assert.equal(element('authName').textContent, 'PC-B');
+  element('allow').onclick();
+  assert.equal(b.sent.pop().allow, true);
 });

@@ -12,7 +12,7 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
   const senders = new Set();
   const send = (target, data) => { if (target?.readyState === WebSocket.OPEN) target.send(JSON.stringify(data)); };
   function broadcast() {
-    for (const ws of senders) send(ws, { type: 'tvs', host, list: [...tvs].map(([id, e]) => ({ id, name: e.name, busy: !!e.sender && e.sender !== ws, mine: e.sender === ws })) });
+    for (const ws of senders) send(ws, { type: 'tvs', host, list: [...tvs].map(([id, e]) => ({ id, name: e.name, busy: (!!e.sender && e.sender !== ws) || e.elsewhere, mine: e.sender === ws })) });
   }
   function cancelPending(entry, reason) {
     if (!entry.pending) return;
@@ -28,6 +28,8 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
   }
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
+    // A TV varre a rede atrás de computadores: este endereço identifica o app.
+    if (pathname === '/ping') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }); return res.end(JSON.stringify({ app: 'sala-tv', host })); }
     const files = { '/': 'public/index.html', '/tv': 'tv/index.html', '/app.js': 'public/app.js', '/style.css': 'public/style.css', '/ink.js': 'public/ink.js', '/logo.png': 'public/logo.png' };
     if (!files[pathname]) { res.writeHead(404); return res.end(); }
     res.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : pathname.endsWith('.png') ? 'image/png' : 'text/html; charset=utf-8');
@@ -51,8 +53,8 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
           const old = tvs.get(msg.id);
           if (old) { cancelPending(old, 'A TV reconectou. Tente novamente.'); send(old.sender, { type: 'peer-left' }); unpair(old); old.tv.terminate(); }
           state.role = 'tv'; state.tv = msg.id;
-          tvs.set(msg.id, { tv: ws, ip, name: `${String(msg.name || 'TV').slice(0, 40)} (${ip})`, sender: null, pending: null });
-          send(ws, { type: 'joined', name: tvs.get(msg.id).name });
+          tvs.set(msg.id, { tv: ws, ip, name: `${String(msg.name || 'TV').slice(0, 40)} (${ip})`, sender: null, pending: null, elsewhere: false });
+          send(ws, { type: 'joined', name: tvs.get(msg.id).name, ip });
           return broadcast();
         }
         if (msg.role !== 'sender') return ws.close(1008);
@@ -64,7 +66,7 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
         if (state.tv) return send(ws, { type: 'error', message: 'Desconecte da TV atual antes de escolher outra.' });
         if (typeof msg.token !== 'string' || !/^[\w-]{16,128}$/.test(msg.token)) return send(ws, { type: 'error', message: 'Pedido inválido.' });
         if (!entry) return send(ws, { type: 'error', message: 'TV não encontrada. Ela pode ter desligado.' });
-        if (entry.sender) return send(ws, { type: 'error', message: 'Esta TV já está em uso por outro computador.' });
+        if (entry.sender || entry.elsewhere) return send(ws, { type: 'error', message: 'Esta TV já está em uso por outro computador.' });
         if (entry.pending && entry.pending.ws !== ws) return send(ws, { type: 'error', message: 'A TV está respondendo a outro pedido. Tente em instantes.' });
         if (entry.pending) clearTimeout(entry.pending.timer);
         entry.pending = { ws, timer: setTimeout(() => cancelPending(entry, 'A TV não respondeu ao pedido de acesso.'), AUTH_TIMEOUT) };
@@ -87,6 +89,12 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
         send(entry.tv, { type: 'renamed', name, full: entry.name });
         send(ws, { type: 'renamed', name, full: entry.name });
         return broadcast();
+      }
+      // A TV fica ligada a vários computadores; apresentando para outro, aparece aqui como em uso.
+      if (state.role === 'tv' && msg.type === 'presence') {
+        const entry = tvs.get(state.tv);
+        if (entry) { entry.elsewhere = !!msg.busy; broadcast(); }
+        return;
       }
       if (state.role === 'tv' && msg.type === 'auth-response') {
         const entry = tvs.get(state.tv), pending = entry?.pending;

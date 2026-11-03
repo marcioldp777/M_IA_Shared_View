@@ -12,6 +12,12 @@ tv/author-signature.xml
 tv/signature1.xml
 tv/.manifest.tmp
 android/app/src/main/assets/
+webos/index.html
+webos/app.js
+webos/style.css
+webos/ink.js
+webos/logo.png
+*.ipk
 android/.gradle/
 android/build/
 android/app/build/

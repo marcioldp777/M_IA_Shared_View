@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var role = document.body.dataset.role, socket, pc, stream, candidates = [], slides = [], slideIndex = 0;
-  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null;
+  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false;
   var $ = function (id) { return document.getElementById(id); };
   function load(key, fallback) { try { var value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch (_) { return fallback; } }
   function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
@@ -130,33 +130,77 @@
     }
   }
   function connect(base) {
+    if (role === 'tv') return openLobby(base);
     clearTimeout(retryTimer); clearTimeout(connectTimer);
     if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.onopen = null; }
     if (socket) socket.close();
     currentBase = base; connected = false;
     socket = new WebSocket(base.replace(/^http/, 'ws').replace(/\/$/, ''));
-    if (role === 'tv') status('Conectando ao computador em ' + base + '…');
     connectTimer = setTimeout(function () { if (socket && socket.readyState === 0) socket.close(); }, 8000);
-    socket.onopen = function () { clearTimeout(connectTimer); connected = true; send(role === 'tv' ? { type: 'join', role: 'tv', id: tvId, name: tvName } : { type: 'join', role: 'sender' }); };
+    socket.onopen = function () { clearTimeout(connectTimer); connected = true; send({ type: 'join', role: 'sender' }); };
     socket.onerror = function () { status('Não foi possível conectar. Confira o endereço e o servidor.'); };
     socket.onclose = function () {
       clearTimeout(connectTimer); connected = false;
       stop();
-      if (role === 'sender') {
-        if (desktop) desktop.sharing(false);
-        $('controls').hidden = true; tvList = []; renderTvs();
-        status('Sem conexão com o servidor. Nova tentativa em 3 segundos.');
-        retryTimer = setTimeout(function () { connect(base); }, 3000);
-      } else {
-        command('stop'); // volta para a tela inicial, senão o último vídeo cobre a tela de espera
-        showAuth(null); $('setup').hidden = false; $('tvName').textContent = '';
-        status('Sem conexão com ' + base + '. Abra o M I.A. Shared View no Windows. Nova tentativa em 5 segundos.');
-        retryTimer = setTimeout(function () { connect(base); }, 5000);
-      }
+      if (desktop) desktop.sharing(false);
+      $('controls').hidden = true; tvList = []; renderTvs();
+      status('Sem conexão com o servidor. Nova tentativa em 3 segundos.');
+      retryTimer = setTimeout(function () { connect(base); }, 3000);
     };
-    socket.onmessage = async function (event) {
+    socket.onmessage = function (event) { return receive(event.data); };
+  }
+  // TV: fica conectada a todos os computadores encontrados ("saguão"); a conexão ativa (socket) é a do PC que pediu acesso.
+  var lobbies = {};
+  function lobbyList() { return Object.keys(lobbies).map(function (key) { return lobbies[key]; }); }
+  function setPresenting(value) {
+    presenting = value;
+    lobbyList().forEach(function (ws) { if (ws !== socket && ws.readyState === 1) ws.send(JSON.stringify({ type: 'presence', busy: value })); });
+  }
+  function openLobby(base) {
+    base = base.replace(/\/$/, '');
+    if (lobbies[base]) return;
+    var ws = new WebSocket(base.replace(/^http/, 'ws'));
+    lobbies[base] = ws;
+    var timer = setTimeout(function () { if (ws.readyState === 0) ws.close(); }, 8000);
+    ws.onopen = function () {
+      clearTimeout(timer);
+      ws.send(JSON.stringify({ type: 'join', role: 'tv', id: tvId, name: tvName }));
+      if (presenting) ws.send(JSON.stringify({ type: 'presence', busy: true }));
+    };
+    ws.onerror = function () {};
+    ws.onclose = function () {
+      clearTimeout(timer);
+      if (lobbies[base] === ws) delete lobbies[base];
+      if (ws === socket) {
+        socket = null; currentBase = ''; connected = false; setPresenting(false); stop();
+        command('stop'); // volta para a tela inicial, senão o último vídeo cobre a tela de espera
+        showAuth(null);
+      }
+      if (ws.joined) setTimeout(function () { openLobby(base); }, 5000); // PC conhecido: pode só ter reiniciado
+      updateLobby();
+    };
+    ws.onmessage = function (event) {
+      if (ws !== socket) {
+        var msg; try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (msg.type === 'joined') { ws.joined = true; ws.label = msg.name; remember(base, msg.ip); updateLobby(); return; }
+        if (msg.type !== 'auth-request') return;
+        // Um computador por vez: apresentando (ou com pedido aberto), recusa os outros.
+        if (presenting || pendingAuth) return ws.send(JSON.stringify({ type: 'auth-response', allow: false }));
+        socket = ws; currentBase = base; connected = true;
+      }
+      return receive(event.data);
+    };
+  }
+  function updateLobby() {
+    if (presenting) return;
+    var open = lobbyList().filter(function (ws) { return ws.joined; });
+    $('tvName').textContent = open.length ? open[0].label : '';
+    $('setup').hidden = open.length > 0;
+    status(open.length > 1 ? 'Disponível para ' + open.length + ' computadores. Aguardando…' : open.length ? 'Aguardando um computador…' : 'Procurando computadores com o M I.A. Shared View na rede…');
+  }
+  async function receive(raw) {
       try {
-        var msg = JSON.parse(event.data);
+        var msg = JSON.parse(raw);
         if (msg.type === 'error') { status(msg.message); return; }
         if (msg.type === 'tvs') { host = msg.host || host; tvList = msg.list; renderTvs(); }
         if (msg.type === 'waiting') status('Confirme o acesso no controle remoto da TV ' + msg.name + '…');
@@ -174,8 +218,9 @@
           else showAuth(msg);
         }
         if (msg.type === 'auth-cancel' && role === 'tv') showAuth(null);
-        if (msg.type === 'peer-ready') status('Apresentador conectado. Aguardando conteúdo…');
+        if (msg.type === 'peer-ready') { setPresenting(true); status('Apresentador conectado. Aguardando conteúdo…'); }
         if (msg.type === 'peer-left') {
+          setPresenting(false);
           if (role === 'tv') { command('stop'); status('Apresentador desconectado.'); }
           else { endShare(); $('controls').hidden = true; status('A TV foi desconectada.'); }
         }
@@ -199,13 +244,13 @@
           $('slide').src = msg.data; $('slide').hidden = false; $('screen').hidden = true; $('welcome').hidden = true; status('');
         }
       } catch (error) { status('Falha: ' + error.message); }
-    };
   }
   if (role === 'tv') {
     var tvId = load('sala-tv-id', '') || randomId(), trusted = load('sala-trusted', {}), tvName = 'Samsung TV';
     save('sala-tv-id', tvId);
     try { tvName = tizen.systeminfo.getCapability('http://tizen.org/system/model_name') || tvName; } catch (_) {}
     // App Android (Fire TV, Android TV, TV Box): nome do aparelho, botão Voltar e descoberta do computador.
+    if (typeof PalmSystem !== 'undefined') tvName = 'LG TV'; // LG webOS: renomeie pelo painel
     if (typeof SalaAndroid !== 'undefined') { tvName = 'Android TV'; try { tvName = SalaAndroid.deviceName() || tvName; } catch (_) {} }
     tvName = load('sala-tv-name', '') || tvName; // nome dado pelo painel (Renomear TV)
     // msg null fecha o pedido; a resposta fica lembrada pelo token do computador.
@@ -231,23 +276,65 @@
       return true;
     };
     document.addEventListener('keydown', function (e) {
-      if (e.keyCode !== 10009 || back()) return; // 10009 = Voltar no controle Samsung
-      try { tizen.application.getCurrentApplication().exit(); } catch (_) {}
+      if ((e.keyCode !== 10009 && e.keyCode !== 461) || back()) return; // Voltar: 10009 no controle Samsung, 461 no LG
+      try { tizen.application.getCurrentApplication().exit(); } catch (_) { try { window.close(); } catch (__) {} }
     });
     if (typeof SalaInk !== 'undefined') {
       ink = SalaInk($('ink'), frame, { video: $('screen'), pointer: true });
       addEventListener('resize', layout); $('screen').addEventListener('resize', layout);
     }
-    var saved = '';
-    try { saved = localStorage.getItem('sala-server') || ''; } catch (_) {}
+    // Descoberta: a TV procura sozinha os computadores com o app aberto (porta 8787) e se liga a todos.
+    // Varre as sub-redes /24 já vistas (dela e dos PCs) e as faixas cadastradas uma vez na TV.
+    var PORT = 8787, servers = load('sala-servers', []), subnets = load('sala-subnets', []), scanning = false;
+    var prefixOf = function (ip) { var m = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip || ''); return m ? m[1] : ''; };
+    var hostOf = function (base) { var m = /^https?:\/\/([\d.]+)/.exec(base || ''); return m ? m[1] : ''; };
+    var remember = function (base, tvIp) {
+      if (servers.indexOf(base) < 0) { servers.unshift(base); servers = servers.slice(0, 30); save('sala-servers', servers); }
+      [prefixOf(hostOf(base)), prefixOf(tvIp)].forEach(function (prefix) {
+        if (prefix && subnets.indexOf(prefix) < 0) { subnets.push(prefix); subnets = subnets.slice(-16); save('sala-subnets', subnets); }
+      });
+    };
+    // "192.168.1.0/24", "192.168.1.*", "192.168.1.20-80", "192.168.1.15" ou "http://192.168.1.15:8787", separados por vírgula/espaço.
+    var expand = function (text) {
+      var hosts = [];
+      String(text || '').split(/[\s,;]+/).filter(Boolean).forEach(function (item) {
+        var m, ip = hostOf(item) || item;
+        if ((m = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(?:\*|0\/24)$/.exec(ip))) for (var i = 1; i < 255; i++) hosts.push(m[1] + '.' + i);
+        else if ((m = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})-(\d{1,3})$/.exec(ip)) && +m[2] <= +m[3] && +m[3] < 256) for (var j = +m[2]; j <= +m[3]; j++) hosts.push(m[1] + '.' + j);
+        else if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) hosts.push(ip);
+        else throw new Error('Faixa inválida: ' + item + '. Use, por exemplo, 192.168.1.0/24');
+      });
+      return hosts;
+    };
+    var ranges = load('sala-ranges', '') || document.body.dataset.ranges || ''; // data-ranges: faixas gravadas na instalação
+    var ping = function (ip) {
+      var abort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = setTimeout(function () { if (abort) abort.abort(); }, 1500);
+      return fetch('http://' + ip + ':' + PORT + '/ping', abort ? { signal: abort.signal } : {})
+        .then(function (res) { return res.json(); })
+        .then(function (info) { if (info && info.app === 'sala-tv') openLobby('http://' + ip + ':' + PORT); })
+        .catch(function () {})
+        .then(function () { clearTimeout(timer); });
+    };
+    var scan = async function () {
+      servers.forEach(function (base) { openLobby(base); });
+      if (scanning || typeof fetch === 'undefined') return;
+      scanning = true;
+      try {
+        var hosts = [];
+        subnets.forEach(function (prefix) { hosts = hosts.concat(expand(prefix + '.*')); });
+        try { hosts = hosts.concat(expand(ranges)); } catch (_) {}
+        hosts = hosts.filter(function (ip, i) { return hosts.indexOf(ip) === i && !lobbies['http://' + ip + ':' + PORT]; }).slice(0, 4096);
+        for (var i = 0; i < hosts.length; i += 64) await Promise.all(hosts.slice(i, i + 64).map(ping));
+      } finally { scanning = false; }
+    };
     var hosted = /^https?:$/.test(location.protocol) && location.port;
-    var initialServer = hosted ? location.origin : (saved || document.body.dataset.server || '');
-    $('server').value = initialServer;
+    $('server').value = ranges;
     $('openServer').onclick = function () {
       var value = $('server').value.trim();
-      if (!/^https?:\/\/[^/]+\/?$/.test(value)) return status('Use o endereço completo: http://IP-DO-COMPUTADOR:8787');
-      try { localStorage.setItem('sala-server', value); } catch (_) {}
-      connect(value);
+      try { expand(value); } catch (error) { return status(error.message); }
+      ranges = value; save('sala-ranges', value);
+      status('Procurando computadores…'); scan();
     };
     document.addEventListener('keydown', function (e) { if (e.keyCode === 13) play(); });
     document.addEventListener('visibilitychange', function () {
@@ -256,15 +343,29 @@
     });
     if (typeof window !== 'undefined') {
       window.salaBack = back; // app Android: o botão Voltar nativo pergunta aqui antes de fechar
-      // Anúncio UDP do app Windows: troca de endereço só se ainda não estiver conectado (ex.: IP do PC mudou).
-      window.salaDiscovered = function (url) {
-        if (connected || (url === currentBase && socket && socket.readyState === 0)) return;
-        $('server').value = url;
-        try { localStorage.setItem('sala-server', url); } catch (_) {}
-        connect(url);
-      };
+      // Anúncio UDP do app Windows (Android) e abertura pela busca de um PC: mais um computador no saguão.
+      window.salaDiscovered = function (url) { openLobby(url); };
     }
-    if (initialServer) connect(initialServer);
+    // Aberto pela busca de um PC (API remota da Samsung): o endereço dele vem no PAYLOAD do app control.
+    var launchedServer = function () {
+      try {
+        var request = tizen.application.getCurrentApplication().getRequestedAppControl();
+        var match = /https?:\/\/\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}/.exec(JSON.stringify(request.appControl.data || []));
+        return match ? match[0] : '';
+      } catch (_) { return ''; }
+    };
+    var useLaunchedServer = function () { var url = launchedServer(); if (url) openLobby(url); };
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('appcontrol', useLaunchedServer);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) useLaunchedServer(); });
+    if (hosted) openLobby(location.origin);
+    else {
+      // Endereço gravado na instalação (data-server) e o antigo endereço salvo: viram pontos de partida da busca.
+      var legacy = ''; try { legacy = JSON.parse(localStorage.getItem('sala-server') || '""'); } catch (_) { try { legacy = localStorage.getItem('sala-server') || ''; } catch (__) {} }
+      [document.body.dataset.server, legacy, launchedServer()].forEach(function (base) {
+        if (base && /^https?:\/\/[\d.]+:\d+\/?$/.test(base)) { openLobby(base); var prefix = prefixOf(hostOf(base)); if (subnets.indexOf(prefix) < 0) subnets.push(prefix); }
+      });
+      updateLobby(); scan(); setInterval(scan, 30000);
+    }
   } else {
     var renderTvs = function () {
       var box = $('tvs'), paired = tvList.some(function (tv) { return tv.mine; });
@@ -283,8 +384,11 @@
           status('Pedindo acesso a ' + tv.name + '…');
         };
         box.appendChild(button);
+        // TV aberta pela busca: pede o acesso assim que ela entra na lista.
+        if (awaitIp && !paired && !tv.busy && tv.name.slice(-(awaitIp.length + 2)) === '(' + awaitIp + ')') { awaitIp = null; clearTimeout(awaitTimer); button.onclick(); }
       });
     };
+    var awaitIp = null, awaitTimer;
     $('renameTv').onclick = function () { send({ type: 'rename', name: $('tvNewName').value }); };
     $('tvNewName').onkeydown = function (e) { if (e.key === 'Enter') $('renameTv').onclick(); };
     $('leave').onclick = function () { endShare(); send({ type: 'command', action: 'stop' }); send({ type: 'leave' }); };
@@ -292,8 +396,41 @@
     var desktop = window.salaDesktop;
     var endShare = function () { stop(); if (desktop) desktop.sharing(false); };
     if (desktop) {
-      $('openInstaller').hidden = false;
-      $('openInstaller').onclick = function () { desktop.openInstaller(); };
+      // Busca por IP/faixa (rede grande): a TV escolhida abre o receptor apontando para este PC e o acesso é pedido sozinho.
+      $('search').hidden = false;
+      $('searchRange').value = load('sala-search', '');
+      $('searchRange').onkeydown = function (e) { if (e.key === 'Enter') $('searchTvs').onclick(); };
+      desktop.onSearchProgress(function (data) {
+        if (data.found) addFound(data.found);
+        if (data.total) status('Procurando TVs Samsung… ' + data.done + ' de ' + data.total + ' endereços.');
+      });
+      var addFound = function (tv) {
+        var button = document.createElement('button');
+        button.className = 'secondary';
+        button.textContent = tv.name + ' (' + tv.ip + ')';
+        button.onclick = async function () {
+          button.disabled = true;
+          status('Abrindo o M I.A. Shared View em ' + tv.name + '… Se a TV pedir, permita o acesso no controle remoto.');
+          var result = await desktop.launchTv(tv.ip);
+          button.disabled = false;
+          if (!result || !result.ok) return status(result ? result.message : 'Falha ao abrir o app na TV.');
+          awaitIp = tv.ip; clearTimeout(awaitTimer);
+          awaitTimer = setTimeout(function () { if (awaitIp) { awaitIp = null; status('A TV abriu o app, mas não conectou a este computador. Confira se o firewall libera a porta 8787.'); } }, 30000);
+          status('App aberto na TV. Aguardando ela se conectar a ' + result.server + '…');
+          renderTvs();
+        };
+        $('found').appendChild(button);
+      };
+      $('searchTvs').onclick = async function () {
+        var text = $('searchRange').value.trim();
+        save('sala-search', text);
+        $('searchTvs').disabled = true; $('found').textContent = '';
+        var result = await desktop.searchTvs(text);
+        $('searchTvs').disabled = false;
+        if (!result) return;
+        if (!result.ok) return status(result.message);
+        status(result.found.length ? result.found.length + ' TV(s) Samsung encontrada(s). Clique em uma para conectar.' : 'Nenhuma TV Samsung respondeu nessa faixa. Confira se a TV está ligada e o endereço.');
+      };
       $('tools').hidden = false;
       document.querySelectorAll('[data-tool]').forEach(function (button) { button.onclick = function () { desktop.setTool(button.dataset.tool); }; });
       $('clearInk').onclick = function () { desktop.clear(); };
