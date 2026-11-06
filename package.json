@@ -62,7 +62,17 @@
       "assets/**",
       "tv/config.xml",
       "tv/index.html",
-      "tv/icon.png"
+      "tv/icon.png",
+      "virtual-display.js",
+      "win-display.js",
+      "display-position.js",
+      "vdd-install.js"
+    ],
+    "extraResources": [
+      {
+        "from": "vdd",
+        "to": "vdd"
+      }
     ]
   },
   "repository": {
