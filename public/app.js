@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var role = document.body.dataset.role, socket, pc, stream, candidates = [], slides = [], slideIndex = 0;
-  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false, fillScreen = false;
+  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false, fillScreen = false, previewInk = null;
   var $ = function (id) { return document.getElementById(id); };
   function load(key, fallback) { try { var value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch (_) { return fallback; } }
   function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
@@ -45,6 +45,7 @@
     stream = null;
     if ($('preview')) $('preview').srcObject = null;
     if ($('share')) { $('share').textContent = 'Compartilhar tela'; $('share').className = 'main-action'; $('live').hidden = true; $('fillToggle').setAttribute('aria-pressed', 'false'); }
+    if (previewInk) previewInk.handle({ op: 'clear' }); // a ferramenta escolhida continua; os desenhos saem
     cleanup();
   }
   // Painel: volta para a escolha da TV.
@@ -450,12 +451,38 @@
       var markToolbar = function (on) { $('toolbarToggle').setAttribute('aria-pressed', on ? 'true' : 'false'); };
       setToolbar = function (on) { desktop.toolbar(on); markToolbar(on); };
       $('toolbarToggle').onclick = function () { setToolbar($('toolbarToggle').getAttribute('aria-pressed') !== 'true'); };
+      // Pré-via como mesa de trabalho: as ferramentas da caixa também desenham aqui; o traço vai à TV e à tela real.
+      var stage = $('stage'), preview = $('preview'), canvas = $('previewInk'), cursorTool = false;
+      var previewFrame = function () { return SalaPen.fit(stage.clientWidth || 1, stage.clientHeight || 1, preview.videoWidth || 16, preview.videoHeight || 9); };
+      var toPoint = function (e) {
+        var box = canvas.getBoundingClientRect(), f = previewFrame();
+        var x = (e.clientX - box.left - f.x) / f.w, y = (e.clientY - box.top - f.y) / f.h;
+        return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x: x, y: y } : null; // faixas pretas não contam
+      };
+      previewInk = SalaInk(canvas, previewFrame, { box: function () { return { width: stage.clientWidth, height: stage.clientHeight }; }, video: preview, pointer: true });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () { previewInk.resize(); }).observe(stage);
+      preview.addEventListener('resize', function () { previewInk.resize(); });
+      var fromPreview = function (msg) { previewInk.handle(msg); send(Object.assign({ type: 'annotate' }, msg)); desktop.ink(msg); };
+      var pen = SalaPen(canvas, {
+        point: toPoint, emit: fromPreview, local: previewInk.handle, hit: previewInk.hit,
+        zoom: function (rect) { send({ type: 'annotate', op: 'zoom', rect: rect }); desktop.ink({ op: 'zoom', rect: rect }); }
+      });
+      // Apontador, lupa e holofote acompanham o mouse sobre a pré-via.
+      canvas.addEventListener('pointermove', function (e) { if (cursorTool) { var p = toPoint(e); fromPreview(p ? { op: 'cursor', x: p.x, y: p.y } : { op: 'cursor', x: null, y: null }); } });
+      canvas.addEventListener('pointerleave', function () { if (cursorTool) fromPreview({ op: 'cursor', x: null, y: null }); });
       desktop.onAnnotate(function (msg) {
         if (msg.op === 'notice') return status(msg.message);
         if (msg.op === 'stop-share') return stopShare();
         if (msg.op === 'tv-command') return send({ type: 'command', action: msg.action });
         if (msg.op === 'toolbar') return markToolbar(msg.visible); // fechada pelo X da própria caixa
         send(Object.assign({ type: 'annotate' }, msg));
+        if (msg.op === 'zoom') return; // a pré-via mostra a captura sem zoom
+        previewInk.handle(msg);
+        if (msg.op === 'tool') {
+          pen.setTool(msg);
+          cursorTool = /^(pointer|magnifier|spotlight)$/.test(msg.tool || '');
+          stage.className = 'stage' + (msg.tool === 'eraser' ? ' erase' : /^(pen|highlighter|laser|shape|select)$/.test(msg.tool || '') ? ' draw' : '');
+        }
       });
     }
     connect(location.origin);
