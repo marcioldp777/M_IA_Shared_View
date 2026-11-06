@@ -98,3 +98,14 @@ test('ping identifica o app e TV apresentando para outro PC aparece em uso', asy
     assert.match(error.message, /em uso/);
   } finally { opened.forEach(ws => ws.terminate()); server.close(); }
 });
+
+test('painel: todo script e estilo citado no index.html é servido', async () => {
+  const { server } = createServer({ host: 'PC-TESTE' });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const html = require('node:fs').readFileSync(require.resolve('../public/index.html'), 'utf8');
+    const refs = [...html.matchAll(/(?:src|href)="(\/[^"]+\.(?:js|css))"/g)].map(m => m[1]);
+    assert.ok(refs.includes('/pen.js'));
+    for (const ref of refs) assert.equal((await fetch(`http://127.0.0.1:${server.address().port}${ref}`)).status, 200, ref);
+  } finally { server.close(); }
+});

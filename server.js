@@ -30,7 +30,7 @@ function createServer({ log = () => {}, host = os.hostname(), diagnostics = fals
     const pathname = new URL(req.url, 'http://localhost').pathname;
     // A TV varre a rede atrás de computadores: este endereço identifica o app.
     if (pathname === '/ping') { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }); return res.end(JSON.stringify({ app: 'sala-tv', host })); }
-    const files = { '/': 'public/index.html', '/tv': 'tv/index.html', '/app.js': 'public/app.js', '/style.css': 'public/style.css', '/ink.js': 'public/ink.js', '/logo.png': 'public/logo.png' };
+    const files = { '/': 'public/index.html', '/tv': 'tv/index.html', '/app.js': 'public/app.js', '/style.css': 'public/style.css', '/ink.js': 'public/ink.js', '/pen.js': 'public/pen.js', '/logo.png': 'public/logo.png' };
     if (!files[pathname]) { res.writeHead(404); return res.end(); }
     res.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : pathname.endsWith('.png') ? 'image/png' : 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
