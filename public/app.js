@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var role = document.body.dataset.role, socket, pc, stream, candidates = [], slides = [], slideIndex = 0;
-  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false, fillScreen = false, previewInk = null;
+  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false, fillScreen = false, previewInk = null, virtualMode = false;
   var $ = function (id) { return document.getElementById(id); };
   function load(key, fallback) { try { var value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch (_) { return fallback; } }
   function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
@@ -47,6 +47,8 @@
     if ($('share')) { $('share').textContent = 'Compartilhar tela'; $('share').className = 'main-action'; $('live').hidden = true; $('fillToggle').setAttribute('aria-pressed', 'false'); }
     if (previewInk) previewInk.handle({ op: 'clear' }); // a ferramenta escolhida continua; os desenhos saem
     if (setCompact && document.body.classList.contains('compact')) setCompact(false); // painel volta ao tamanho normal
+    if (virtualMode) { virtualMode = false; window.salaDesktop.vdd.off(); $('extendTip').hidden = true; } // TV como 2º monitor: a tela some
+    if ($('extend') && window.salaDesktop && window.salaDesktop.vdd) $('extend').hidden = false;
     cleanup();
   }
   // Painel: volta para a escolha da TV.
@@ -461,6 +463,34 @@
         $('miniToggle').textContent = on ? '⤢ Expandir' : '⤡ Encolher para o canto';
         desktop.compact(on);
       };
+      // TV como 2º monitor: instala o monitor virtual na primeira vez, conecta à direita e transmite essa tela.
+      var vdd = desktop.vdd;
+      $('extend').hidden = false;
+      var extend = async function () {
+        $('vddSetup').hidden = true;
+        $('extend').disabled = true;
+        try {
+          var result = await vdd.on();
+          if (!result || !result.ok) return status(result ? result.message : 'O monitor virtual não respondeu. Reinicie o computador ou reinstale.');
+          virtualMode = true; $('extendTip').hidden = false;
+          await startShare();
+        } finally { $('extend').disabled = false; }
+      };
+      $('extend').onclick = async function () {
+        if ($('controls').hidden) return status('Escolha uma TV antes de compartilhar.');
+        var info = await vdd.status();
+        if (info && info.installed) return extend();
+        $('vddSetup').hidden = false;
+      };
+      $('vddLater').onclick = function () { $('vddSetup').hidden = true; };
+      $('vddInstall').onclick = async function () {
+        $('vddInstall').disabled = true; status('Instalando o monitor virtual…');
+        var result = await vdd.install();
+        $('vddInstall').disabled = false;
+        if (!result || !result.ok) return status(result ? result.message : 'A instalação não foi concluída.');
+        status('Monitor virtual instalado.');
+        extend();
+      };
       $('miniToggle').onclick = function () { setCompact(!document.body.classList.contains('compact')); };
       // Pré-via como mesa de trabalho: as ferramentas da caixa também desenham aqui; o traço vai à TV e à tela real.
       var stage = $('stage'), preview = $('preview'), canvas = $('previewInk'), cursorTool = false;
@@ -498,8 +528,8 @@
     }
     connect(location.origin);
     // Um único botão: compartilha ou, durante a transmissão, para.
-    $('share').onclick = async function () {
-      if (stream) return stopShare();
+    $('share').onclick = function () { return stream ? stopShare() : startShare(); };
+    async function startShare() {
       if ($('controls').hidden) return status('Escolha uma TV antes de compartilhar.');
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return status('Abra o painel em http://localhost:8787 usando Chrome ou Edge no computador.');
       try {
@@ -519,7 +549,7 @@
           }
         }
         $('preview').srcObject = stream;
-        $('share').textContent = 'Parar transmissão'; $('share').className = 'main-action stop'; $('live').hidden = false;
+        $('share').textContent = 'Parar transmissão'; $('share').className = 'main-action stop'; $('live').hidden = false; $('extend').hidden = true;
         if (setToolbar && $('autoToolbar').checked) setToolbar(true);
         if (setCompact && $('autoMini').checked) setCompact(true);
         var peer = connection();
@@ -531,7 +561,7 @@
         await peer.setLocalDescription(await peer.createOffer()); send({ type: 'offer', description: peer.localDescription });
         status(stream.getAudioTracks().length ? 'Conectando imagem e áudio' + (audioError ? ' (via ' + stream.getAudioTracks()[0].label + ')' : '') + '…' : audioError ? 'Conectando só imagem: o áudio do sistema não pôde ser capturado (' + audioError + '). Ative a "Mixagem estéreo" ou instale o VB-Cable.' :'Conectando imagem. A captura selecionada não forneceu áudio.');
       } catch (error) { stop(); status('Não foi possível compartilhar: ' + error.message); }
-    };
+    }
     function stopShare() { endShare(); send({ type: 'command', action: 'stop' }); status('Transmissão encerrada.'); }
     async function showSlide(index) {
       if (!slides.length) return;
