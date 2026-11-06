@@ -44,11 +44,11 @@ Ao compartilhar a tela principal inteira, a camada transparente (`overlay`) cobr
 ### Driver
 
 - **Virtual Display Driver** (VirtualDrivers, licença MIT, assinado via SignPath; IddCx). Versão fixada e empacotada no app em `vdd/`, com a licença.
-- Controle sem administrador pelo pipe `\\.\pipe\MTTVirtualDisplayPipe`: uma conexão por comando, texto em UTF-16LE; resposta lida até o fim da conexão. Comandos usados: `PING` (espera `PONG`), `SETDISPLAYCOUNT 1`, `SETDISPLAYCOUNT 0`.
-- Configuração: `vdd_settings.xml` com 1 resolução 1920×1080 @ 60 Hz, gravado pelo script de instalação.
+- **Controle pela configuração de vídeo do Windows, sem administrador** (o pipe não serve: ver "Teste de 2026-11-05"). O driver mantém sempre 1 monitor (`MONITOR\MTT1337`); o app o **conecta** à área de trabalho (estender, encostado na borda direita das telas conectadas, 1920×1080) e o **desconecta** com `ChangeDisplaySettingsExW` (`CDS_UPDATEREGISTRY`), localizando-o por `EnumDisplayDevicesW` (monitor cujo DeviceID contém `MTT1337`). Instalado = esse monitor existe.
+- Configuração: `C:\VirtualDisplayDriver\vdd_settings.xml` com 1 resolução 1920×1080 @ 60 Hz, gravada por `vdd/install.ps1`; a instalação deve terminar com o monitor desconectado.
 - Instalação **sob demanda**: o instalador do app não muda. No primeiro uso, o app executa o script de instalação silenciosa com elevação (UAC).
 
-> Fatos ainda não confirmados em código-fonte oficial (vieram de documentação de terceiros): sintaxe dos comandos do pipe, método de instalação silenciosa (`pnputil` + criação do dispositivo raiz) e ID de hardware (`Root\MttVDD`). **A primeira tarefa da Fase 2 é um teste manual no PC do autor** que confirme esses três pontos antes de qualquer código do app.
+> **Teste de 2026-11-05 (PC do autor, Windows 11, driver 25.7.23):** a instalação com `vdd/install.ps1` (SetupAPI + `UpdateDriverForPlugAndPlayDevicesW`, sem ferramenta de terceiros) deu `OK`; o dispositivo `ROOT\DISPLAY\0000` "Virtual Display Driver" iniciou e o monitor virtual já apareceu **conectado**. Pipe: `PING` sem resposta; `SETDISPLAYCOUNT 0` grava 0 no XML, mas o driver recarrega com 1 monitor, ou seja, **não desliga**. `ChangeDisplaySettingsExW` desconecta e reconecta o monitor sem administrador; conectar leva menos de 2 s. A posição precisa encostar na borda direita (uma posição arbitrária deixou um vão de 1024 px).
 
 ### Fluxo do usuário
 
@@ -60,8 +60,9 @@ Ao compartilhar a tela principal inteira, a camada transparente (`overlay`) cobr
 ### Componentes
 
 - **`virtual-display.js`** (novo, processo principal): `isInstalled()`, `install()`, `on()`, `off()`.
-  - `on()`: `SETDISPLAYCOUNT 1`, depois espera até 10 s por uma tela nova em `screen.getAllDisplays()`; devolve o `display_id`.
-  - `off()`: `SETDISPLAYCOUNT 0`.
+  - `on()`: conecta o monitor virtual na borda direita, depois espera até 10 s por uma tela nova em `screen.getAllDisplays()`; devolve o `display_id`.
+  - `off()`: desconecta o monitor virtual.
+  - Chamadas Win32 via koffi (já usado em `tools.js`); a escolha da posição é uma função pura testável.
 - **`desktop.js`**: IPC `virtual-display` (status/instalar/ligar/desligar); ao ligar, encontra em `desktopCapturer.getSources({ types: ['screen'] })` a fonte com esse `display_id` e a usa no `setDisplayMediaRequestHandler` sem abrir o seletor; `tools.setSource` com essa fonte (a camada já se posiciona sobre a tela compartilhada).
 - **Painel**: botão, diálogo de instalação, dica de uso; reaproveita o fluxo de compartilhamento existente.
 - **`vdd/`**: binários do driver, `LICENSE`, script de instalação silenciosa.
@@ -70,17 +71,17 @@ Ao compartilhar a tela principal inteira, a camada transparente (`overlay`) cobr
 
 | Situação | Comportamento |
 |---|---|
-| Driver não responde ao `PING` | "O monitor virtual não respondeu. Reinicie o computador ou reinstale." A transmissão normal continua disponível. |
-| Tela nova não aparece em 10 s | Desliga o monitor (`SETDISPLAYCOUNT 0`) e avisa. |
+| Monitor virtual não encontrado ou `ChangeDisplaySettingsExW` falha | "O monitor virtual não respondeu. Reinicie o computador ou reinstale." A transmissão normal continua disponível. |
+| Tela nova não aparece em 10 s | Desconecta o monitor e avisa. |
 | UAC recusado ou antivírus bloqueia a instalação | Mensagem clara; o botão continua oferecendo a instalação. |
-| App abre com monitor virtual ligado (sessão anterior) | `SETDISPLAYCOUNT 0` na inicialização, se o driver estiver instalado. |
+| App abre com monitor virtual conectado (sessão anterior ou logo após instalar) | Desconecta na inicialização. |
 | App fecha com monitor ligado | `off()` no `before-quit`. |
 
 ## Testes
 
 Automáticos (`node --test`):
 
-- Cliente do pipe contra um servidor de pipe falso (comando em UTF-16LE, leitura da resposta, erros de conexão).
+- Posição do monitor virtual (borda direita das telas conectadas, inclusive com telas em coordenadas negativas).
 - `on()`: sucesso, tempo-limite e desligamento após falha (com `screen` falso).
 - Conversão de coordenadas da pré-via com letterbox horizontal e vertical.
 - `pen.js`: sequência de eventos → mensagens (`stroke-start`/`stroke-point`, `shape`, `erase`, `zoom`).
