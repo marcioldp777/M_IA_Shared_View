@@ -62,3 +62,12 @@ test('isInstalled e disconnectAtStartup (sem driver, não quebra)', () => {
   const broken = { findVirtual() { throw new Error('koffi'); } };
   assert.doesNotThrow(() => createVirtualDisplay({ win: broken, screen: {} }).disconnectAtStartup());
 });
+
+test('on: monitor já conectado (driver acabou de subir) → desconecta antes e acha a tela ao reconectar', async () => {
+  const win = fakeWin({ attached: true }), clock = fakeClock();
+  // A lista de telas acompanha o estado do Windows falso: id 99 só existe enquanto conectado.
+  const screen = { getAllDisplays: () => (win.findVirtual().attached ? [{ id: 1 }, { id: 99 }] : [{ id: 1 }]) };
+  const virtual = createVirtualDisplay({ win, screen, wait: clock.wait });
+  assert.equal(await virtual.on(), 99);
+  assert.deepEqual(win.calls, [null, { x: 4096, y: 0, width: 1920, height: 1080 }]);
+});

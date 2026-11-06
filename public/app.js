@@ -40,14 +40,15 @@
       });
     }).catch(function () {});
   }
-  function stop() {
+  // keepVirtual: limpeza no início de um compartilhamento do 2º monitor (a tela virtual precisa continuar conectada).
+  function stop(keepVirtual) {
     if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
     stream = null;
     if ($('preview')) $('preview').srcObject = null;
     if ($('share')) { $('share').textContent = 'Compartilhar tela'; $('share').className = 'main-action'; $('live').hidden = true; $('fillToggle').setAttribute('aria-pressed', 'false'); }
     if (previewInk) previewInk.handle({ op: 'clear' }); // a ferramenta escolhida continua; os desenhos saem
     if (setCompact && document.body.classList.contains('compact')) setCompact(false); // painel volta ao tamanho normal
-    if (virtualMode) { virtualMode = false; window.salaDesktop.vdd.off(); $('extendTip').hidden = true; } // TV como 2º monitor: a tela some
+    if (virtualMode && !keepVirtual) { virtualMode = false; window.salaDesktop.vdd.off(); $('extendTip').hidden = true; } // TV como 2º monitor: a tela some
     if ($('extend') && window.salaDesktop && window.salaDesktop.vdd) $('extend').hidden = false;
     cleanup();
   }
@@ -533,7 +534,7 @@
       if ($('controls').hidden) return status('Escolha uma TV antes de compartilhar.');
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return status('Abra o painel em http://localhost:8787 usando Chrome ou Edge no computador.');
       try {
-        stop(); send({ type: 'command', action: 'stop' });
+        stop(true); send({ type: 'command', action: 'stop' });
         var video = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }, audioError = '';
         try { stream = await navigator.mediaDevices.getDisplayMedia({ video: video, audio: true }); }
         catch (error) {

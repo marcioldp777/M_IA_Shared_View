@@ -15,6 +15,13 @@ function createVirtualDisplay({ win, screen, wait = ms => new Promise(r => setTi
   async function on() {
     const virtual = win.findVirtual();
     if (!virtual) throw new Error(FAILED);
+    // Já conectado (o driver sobe conectado, ou alguém ligou pelas Configurações): desconecta e espera a tela sumir,
+    // senão o id dela já estaria em "before" e a tela "nova" nunca apareceria.
+    if (virtual.attached) {
+      const count = screen.getAllDisplays().length;
+      win.setVirtual(virtual.deviceName, null);
+      for (let waited = 0; waited < 3000 && screen.getAllDisplays().length >= count; waited += POLL_MS) await wait(POLL_MS);
+    }
     const before = new Set(screen.getAllDisplays().map(d => d.id));
     const spot = rightEdge(win.attachedBounds(virtual.deviceName));
     if (win.setVirtual(virtual.deviceName, { ...spot, ...SIZE }) !== 0) { off(); throw new Error(FAILED); }

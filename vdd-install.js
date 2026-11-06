@@ -8,7 +8,8 @@ const INSTALL_FAILED = 'A instalação não foi concluída. Se o Windows pediu p
 const quoted = text => `'"${String(text).replace(/'/g, "''")}"'`;
 function elevatedArgs(scriptPath, driverDir) {
   const inner = ["'-NoProfile'", "'-ExecutionPolicy'", "'Bypass'", "'-File'", quoted(scriptPath), "'-DriverDir'", quoted(driverDir)].join(',');
-  return ['-NoProfile', '-Command', `$p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${inner}; exit $p.ExitCode`];
+  // Sem o try/catch, UAC recusado deixa $p vazio e `exit $null` sai com 0 (falso sucesso).
+  return ['-NoProfile', '-Command', `try { $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${inner} -ErrorAction Stop; exit $p.ExitCode } catch { exit 1 }`];
 }
 
 // resources: process.resourcesPath no app instalado, a pasta do projeto em desenvolvimento.

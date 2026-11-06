@@ -29,3 +29,8 @@ test('install: UAC recusado ou antivírus (saída ≠ 0) → mensagem clara', as
   assert.deepEqual(await install({ resources: 'C:\\app\\resources', spawn: fakeSpawn(1) }), { ok: false, message: INSTALL_FAILED });
   assert.match(INSTALL_FAILED, /aceitar/); assert.match(INSTALL_FAILED, /antivírus/);
 });
+
+test('elevatedArgs: falha do Start-Process (UAC recusado) sai com 1, não com 0', () => {
+  const command = elevatedArgs('C:\\a\\install.ps1', 'C:\\a\\driver')[2];
+  assert.match(command, /^try \{ \$p = Start-Process .* -ErrorAction Stop; exit \$p\.ExitCode \} catch \{ exit 1 \}$/);
+});
