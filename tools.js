@@ -10,12 +10,15 @@ const TOOLS = [...CAPTURE_TOOLS, ...CURSOR_TOOLS];
 const SHORTCUTS = { 1: 'pointer', 2: 'pen', 3: 'highlighter', 4: 'magnifier', 5: 'select', 6: 'laser', 7: 'shape', 8: 'eraser', 9: 'spotlight' };
 const DEFAULT_SETTINGS = { color: { pen: '#ff3b30', highlighter: '#ffd60a', laser: '#ff3b30', shape: '#ff3b30' }, size: 'm', shape: 'arrow' };
 const TOOLBAR_WIDTH = 880, TOOLBAR_HEIGHT = 52, TOOLBAR_OPTIONS_HEIGHT = 96;
+const { passThrough } = require('./pass-through');
 
 // Retângulo de uma janela de outro app (desktopCapturer só dá o HWND). Em pixels físicos.
-let windowRect = () => null;
+let windowRect = () => null, foregroundWindow = () => 0;
 try {
   const koffi = require('koffi');
   const user32 = koffi.load('user32.dll'), dwmapi = koffi.load('dwmapi.dll');
+  const GetForegroundWindow = user32.func('intptr __stdcall GetForegroundWindow()');
+  foregroundWindow = () => Number(GetForegroundWindow());
   const RECT = koffi.struct('RECT', { left: 'long', top: 'long', right: 'long', bottom: 'long' });
   const IsWindow = user32.func('bool __stdcall IsWindow(intptr hwnd)');
   const IsIconic = user32.func('bool __stdcall IsIconic(intptr hwnd)');
@@ -96,8 +99,17 @@ function createTools(getPanel) {
     overlay.setBounds(area);
     if (!overlay.isVisible()) { overlay.showInactive(); if (toolbar && !toolbar.isDestroyed()) toolbar.moveTop(); }
   }
+  // Painel em primeiro plano sob o cursor: a camada deixa os cliques passarem (desenho na pré-via) e o cursor real não vai à TV.
+  let passing = false, passTimer = null;
+  const panelHwnd = () => { const handle = getPanel()?.getNativeWindowHandle(); return handle ? Number(handle.readBigUInt64LE(0)) : -1; };
+  function applyMouse() { if (overlay && !overlay.isDestroyed()) overlay.setIgnoreMouseEvents(passing || !CAPTURE_TOOLS.includes(tool), { forward: true }); }
+  function checkPass() {
+    const panel = getPanel();
+    const next = !!panel && !panel.isDestroyed() && !panel.isMinimized() && passThrough(screen.getCursorScreenPoint(), panel.getBounds(), foregroundWindow() === panelHwnd());
+    if (next !== passing) { passing = next; applyMouse(); }
+  }
   function pollCursor() {
-    if (!area) return;
+    if (!area || passing) return;
     const p = screen.getCursorScreenPoint();
     const x = (p.x - area.x) / area.width, y = (p.y - area.y) / area.height;
     const inside = x >= 0 && x <= 1 && y >= 0 && y <= 1;
@@ -115,7 +127,7 @@ function createTools(getPanel) {
     clearInterval(areaTimer); areaTimer = null;
     if (tool || board) {
       ensureOverlay();
-      overlay.setIgnoreMouseEvents(!CAPTURE_TOOLS.includes(tool), { forward: true });
+      applyMouse();
       updateArea();
       areaTimer = setInterval(updateArea, 500); // acompanha a janela se ela for movida
     } else if (overlay && !overlay.isDestroyed()) overlay.hide();
@@ -126,6 +138,8 @@ function createTools(getPanel) {
     if (next && !source) return toPanel({ op: 'notice', message: 'Comece a compartilhar uma tela ou janela para usar as ferramentas.' });
     tool = next || null;
     clearInterval(cursorTimer); cursorTimer = null; lastCursor = '';
+    clearInterval(passTimer); passTimer = null; passing = false;
+    if (tool) passTimer = setInterval(checkPass, 33);
     refreshOverlay();
     if (CURSOR_TOOLS.includes(tool)) cursorTimer = setInterval(pollCursor, 33);
     emit(toolMessage());
@@ -166,6 +180,12 @@ function createTools(getPanel) {
     if (msg.op === 'zoom') { toPanel(msg); zoomed = true; return setTool(null); }
     if (['stroke-start', 'stroke-point', 'shape', 'erase'].includes(msg.op)) toPanel(msg);
   });
+  // Desenho feito na pré-via do painel: aparece também na camada sobre a tela real (a TV o recebe do painel).
+  ipcMain.on('panel-ink', (event, msg) => {
+    if (event.sender !== getPanel()?.webContents || !msg || typeof msg.op !== 'string') return;
+    if (msg.op === 'zoom') { zoomed = true; return setTool(null); }
+    if (['stroke-start', 'stroke-point', 'shape', 'erase', 'cursor'].includes(msg.op)) toOverlay(msg);
+  });
   ipcMain.on('set-tool', (event, next) => { if (event.sender === getPanel()?.webContents) setTool(typeof next === 'string' && next ? next : null); });
   ipcMain.on('clear-ink', event => { if (event.sender === getPanel()?.webContents) emit({ op: 'clear' }); });
   ipcMain.on('undo-ink', event => { if (event.sender === getPanel()?.webContents) emit({ op: 'undo' }); });
@@ -173,6 +193,7 @@ function createTools(getPanel) {
   ipcMain.on('sharing', (event, active) => {
     if (event.sender !== getPanel()?.webContents || active) return;
     reset(); source = null; sharingSince = null; frozen = false; black = false; // a TV volta para a tela de espera
+    getPanel()?.setContentProtection(false);
     toolbarState();
   });
   ipcMain.on('toolbar', (event, visible) => { if (event.sender === getPanel()?.webContents) showToolbar(!!visible); });
@@ -196,8 +217,9 @@ function createTools(getPanel) {
   globalShortcut.register('CommandOrControl+Alt+0', () => emit({ op: 'clear' }));
   globalShortcut.register('CommandOrControl+Alt+Z', () => emit({ op: 'undo' }));
   return {
-    setSource(next) { reset(); source = next; sharingSince = Date.now(); toolbarState(); },
-    dispose() { globalShortcut.unregisterAll(); if (overlay && !overlay.isDestroyed()) overlay.destroy(); showToolbar(false); }
+    // Painel fora da captura enquanto transmite: a TV não mostra o painel (nem o "espelho dentro do espelho").
+    setSource(next) { reset(); source = next; sharingSince = Date.now(); getPanel()?.setContentProtection(true); toolbarState(); },
+    dispose() { clearInterval(passTimer); globalShortcut.unregisterAll(); if (overlay && !overlay.isDestroyed()) overlay.destroy(); showToolbar(false); }
   };
 }
 module.exports = { createTools };
