@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var role = document.body.dataset.role, socket, pc, stream, candidates = [], slides = [], slideIndex = 0;
-  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false;
+  var currentBase = '', connected = false, retryTimer, connectTimer, tvList = [], host = 'Computador', pendingAuth = null, ink = null, zoomRect = null, presenting = false, fillScreen = false;
   var $ = function (id) { return document.getElementById(id); };
   function load(key, fallback) { try { var value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch (_) { return fallback; } }
   function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
@@ -44,8 +44,11 @@
     if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
     stream = null;
     if ($('preview')) $('preview').srcObject = null;
+    if ($('share')) { $('share').textContent = 'Compartilhar tela'; $('share').className = 'main-action'; $('live').hidden = true; $('fillToggle').setAttribute('aria-pressed', 'false'); }
     cleanup();
   }
+  // Painel: volta para a escolha da TV.
+  function showPick() { if ($('controls')) $('controls').hidden = true; if ($('pick')) $('pick').hidden = false; }
   function play() {
     var video = $('screen');
     if (video && video.srcObject) video.play().catch(function () { status('Pressione OK no controle para autorizar imagem e som.'); });
@@ -96,16 +99,17 @@
   // TV: retângulo onde a área compartilhada aparece (ajuste "contain"), ampliado pelo zoom por seleção.
   function frame() {
     var video = $('screen'), W = innerWidth, H = innerHeight, vw = video.videoWidth || W, vh = video.videoHeight || H;
-    var s = Math.min(W / vw, H / vh), b = { w: vw * s, h: vh * s };
+    // Preencher: a imagem cobre a TV inteira (corta as bordas que sobram) em vez de caber com faixas pretas.
+    var s = (fillScreen ? Math.max : Math.min)(W / vw, H / vh), b = { w: vw * s, h: vh * s };
     b.x = (W - b.w) / 2; b.y = (H - b.h) / 2;
     if (!zoomRect) return b;
     var k = Math.min(W / (zoomRect.w * b.w), H / (zoomRect.h * b.h)), w = b.w * k, h = b.h * k;
     return { w: w, h: h, x: W / 2 - (zoomRect.x + zoomRect.w / 2) * w, y: H / 2 - (zoomRect.y + zoomRect.h / 2) * h };
   }
   function layout() {
-    var f = frame();
-    if ($('freeze')) $('freeze').style.cssText = zoomRect ? 'left:' + f.x + 'px;top:' + f.y + 'px;width:' + f.w + 'px;height:' + f.h + 'px;right:auto;bottom:auto;object-fit:fill' : '';
-    $('screen').style.cssText = zoomRect ? 'left:' + f.x + 'px;top:' + f.y + 'px;width:' + f.w + 'px;height:' + f.h + 'px;right:auto;bottom:auto;object-fit:fill' : '';
+    var f = frame(), css = zoomRect || fillScreen ? 'left:' + f.x + 'px;top:' + f.y + 'px;width:' + f.w + 'px;height:' + f.h + 'px;right:auto;bottom:auto;object-fit:fill' : '';
+    if ($('freeze')) $('freeze').style.cssText = css;
+    $('screen').style.cssText = css;
     if (ink) ink.redraw();
   }
   function zoomTo(rect) {
@@ -122,7 +126,9 @@
       still.getContext('2d').drawImage(video, 0, 0); still.style.cssText = video.style.cssText; still.hidden = false;
     }
     if (action === 'unfreeze' && $('freeze')) $('freeze').hidden = true;
+    if (action === 'fill' || action === 'fit') { fillScreen = action === 'fill'; layout(); }
     if (action === 'stop') {
+      fillScreen = false;
       cleanup(); $('screen').srcObject = null; $('screen').hidden = true; $('slide').hidden = true;
       if ($('freeze')) $('freeze').hidden = true;
       $('welcome').hidden = false; $('black').hidden = true; status('Transmissão encerrada.');
@@ -143,7 +149,7 @@
       clearTimeout(connectTimer); connected = false;
       stop();
       if (desktop) desktop.sharing(false);
-      $('controls').hidden = true; tvList = []; renderTvs();
+      showPick(); tvList = []; renderTvs();
       status('Sem conexão com o servidor. Nova tentativa em 3 segundos.');
       retryTimer = setTimeout(function () { connect(base); }, 3000);
     };
@@ -206,13 +212,13 @@
         if (msg.type === 'waiting') status('Confirme o acesso no controle remoto da TV ' + msg.name + '…');
         if (msg.type === 'joined') {
           if (role === 'tv') { $('tvName').textContent = msg.name; $('setup').hidden = true; status('Aguardando um computador…'); }
-          else { $('controls').hidden = false; $('tvNewName').value = msg.name.replace(/ \([\d.]+\)$/, ''); status('Conectado a ' + msg.name + '. Escolha o conteúdo.'); }
+          else { $('controls').hidden = false; $('pick').hidden = true; $('tvLabel').textContent = 'Conectado a ' + msg.name; $('tvNewName').value = msg.name.replace(/ \([\d.]+\)$/, ''); status('Clique em "Compartilhar tela" para mostrar seu computador na TV.'); }
         }
         if (msg.type === 'renamed') {
           if (role === 'tv') { tvName = msg.name; save('sala-tv-name', tvName); $('tvName').textContent = msg.full; }
-          else { $('tvNewName').value = msg.name; status('TV renomeada para ' + msg.name + '.'); }
+          else { $('tvNewName').value = msg.name; $('tvLabel').textContent = 'Conectado a ' + msg.full; status('TV renomeada para ' + msg.name + '.'); }
         }
-        if (msg.type === 'left') { $('controls').hidden = true; status('Desconectado da TV.'); }
+        if (msg.type === 'left') { showPick(); status('Desconectado da TV.'); }
         if (msg.type === 'auth-request' && role === 'tv') {
           if (trusted[msg.token]) send({ type: 'auth-response', allow: true });
           else showAuth(msg);
@@ -222,7 +228,7 @@
         if (msg.type === 'peer-left') {
           setPresenting(false);
           if (role === 'tv') { command('stop'); status('Apresentador desconectado.'); }
-          else { endShare(); $('controls').hidden = true; status('A TV foi desconectada.'); }
+          else { endShare(); showPick(); status('A TV foi desconectada.'); }
         }
         if (msg.type === 'offer' && role === 'tv') {
           connection(); await pc.setRemoteDescription(msg.description);
@@ -395,6 +401,12 @@
     // Ferramentas (só no app Windows): o processo principal desenha sobre o app compartilhado e manda os eventos para cá.
     var desktop = window.salaDesktop;
     var endShare = function () { stop(); if (desktop) desktop.sharing(false); };
+    var setToolbar = null; // só no app Windows
+    $('fillToggle').onclick = function () {
+      var on = $('fillToggle').getAttribute('aria-pressed') !== 'true';
+      $('fillToggle').setAttribute('aria-pressed', on ? 'true' : 'false');
+      send({ type: 'command', action: on ? 'fill' : 'fit' });
+    };
     if (desktop) {
       // Busca por IP/faixa (rede grande): a TV escolhida abre o receptor apontando para este PC e o acesso é pedido sozinho.
       $('search').hidden = false;
@@ -431,25 +443,25 @@
         if (!result.ok) return status(result.message);
         status(result.found.length ? result.found.length + ' TV(s) Samsung encontrada(s). Clique em uma para conectar.' : 'Nenhuma TV Samsung respondeu nessa faixa. Confira se a TV está ligada e o endereço.');
       };
-      $('tools').hidden = false;
-      document.querySelectorAll('[data-tool]').forEach(function (button) { button.onclick = function () { desktop.setTool(button.dataset.tool); }; });
-      $('clearInk').onclick = function () { desktop.clear(); };
-      $('undoInk').onclick = function () { desktop.undo(); };
-      // Caixa flutuante: preferência lembrada neste computador.
-      $('floating').checked = load('sala-floating', false);
-      $('floating').onchange = function () { save('sala-floating', $('floating').checked); desktop.toolbar($('floating').checked); };
-      desktop.toolbar($('floating').checked);
+      // Ferramentas ficam só na caixa flutuante; ela abre sozinha ao compartilhar (preferência lembrada neste computador).
+      $('toolbarToggle').hidden = false; $('autoToolbarRow').hidden = false;
+      $('autoToolbar').checked = load('sala-auto-toolbar', true);
+      $('autoToolbar').onchange = function () { save('sala-auto-toolbar', $('autoToolbar').checked); };
+      var markToolbar = function (on) { $('toolbarToggle').setAttribute('aria-pressed', on ? 'true' : 'false'); };
+      setToolbar = function (on) { desktop.toolbar(on); markToolbar(on); };
+      $('toolbarToggle').onclick = function () { setToolbar($('toolbarToggle').getAttribute('aria-pressed') !== 'true'); };
       desktop.onAnnotate(function (msg) {
         if (msg.op === 'notice') return status(msg.message);
-        if (msg.op === 'stop-share') return $('stop').onclick();
+        if (msg.op === 'stop-share') return stopShare();
         if (msg.op === 'tv-command') return send({ type: 'command', action: msg.action });
-        if (msg.op === 'toolbar') { $('floating').checked = msg.visible; return save('sala-floating', msg.visible); }
+        if (msg.op === 'toolbar') return markToolbar(msg.visible); // fechada pelo X da própria caixa
         send(Object.assign({ type: 'annotate' }, msg));
-        if (msg.op === 'tool') document.querySelectorAll('[data-tool]').forEach(function (button) { button.className = button.dataset.tool && button.dataset.tool === msg.tool ? '' : 'secondary'; });
       });
     }
     connect(location.origin);
+    // Um único botão: compartilha ou, durante a transmissão, para.
     $('share').onclick = async function () {
+      if (stream) return stopShare();
       if ($('controls').hidden) return status('Escolha uma TV antes de compartilhar.');
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return status('Abra o painel em http://localhost:8787 usando Chrome ou Edge no computador.');
       try {
@@ -469,6 +481,8 @@
           }
         }
         $('preview').srcObject = stream;
+        $('share').textContent = 'Parar transmissão'; $('share').className = 'main-action stop'; $('live').hidden = false;
+        if (setToolbar && $('autoToolbar').checked) setToolbar(true);
         var peer = connection();
         var videoTrack = stream.getVideoTracks()[0];
         if ('contentHint' in videoTrack) videoTrack.contentHint = 'motion';
@@ -479,8 +493,7 @@
         status(stream.getAudioTracks().length ? 'Conectando imagem e áudio' + (audioError ? ' (via ' + stream.getAudioTracks()[0].label + ')' : '') + '…' : audioError ? 'Conectando só imagem: o áudio do sistema não pôde ser capturado (' + audioError + '). Ative a "Mixagem estéreo" ou instale o VB-Cable.' :'Conectando imagem. A captura selecionada não forneceu áudio.');
       } catch (error) { stop(); status('Não foi possível compartilhar: ' + error.message); }
     };
-    $('stop').onclick = function () { endShare(); send({ type: 'command', action: 'stop' }); status('Transmissão encerrada.'); };
-    document.querySelectorAll('[data-command]').forEach(function (button) { button.onclick = function () { send({ type: 'command', action: button.dataset.command }); if (desktop) desktop.tvState(button.dataset.command); }; });
+    function stopShare() { endShare(); send({ type: 'command', action: 'stop' }); status('Transmissão encerrada.'); }
     async function showSlide(index) {
       if (!slides.length) return;
       slideIndex = (index + slides.length) % slides.length;

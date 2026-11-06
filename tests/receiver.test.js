@@ -133,3 +133,30 @@ test('TV fica ligada a vários computadores e atende um por vez', async () => {
   element('allow').onclick();
   assert.equal(b.sent.pop().allow, true);
 });
+
+test('preencher a tela: a imagem cobre a TV inteira e "ajustar" volta às faixas pretas', async () => {
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { value: '', textContent: '', hidden: false, style: {}, focus() {} });
+    return elements.get(id);
+  };
+  let socket;
+  class FakeSocket {
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; socket = this; }
+    send(raw) { this.sent.push(JSON.parse(raw)); }
+  }
+  vm.runInNewContext(fs.readFileSync(require.resolve('../public/app.js'), 'utf8'), {
+    document: { body: { dataset: { role: 'tv', server: 'http://192.168.1.15:8787' } }, getElementById: element, addEventListener() {} },
+    location: { protocol: 'file:', port: '' }, innerWidth: 1920, innerHeight: 1080,
+    localStorage: { getItem() { return null; }, setItem() {} },
+    WebSocket: FakeSocket, setTimeout() { return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}, Uint8Array, Math, JSON, Date
+  });
+  socket.onopen();
+  await socket.onmessage({ data: JSON.stringify({ type: 'auth-request', token: 'token-do-pc-000002', name: 'PC' }) });
+  element('allow').onclick();
+  Object.assign(element('screen'), { videoWidth: 1440, videoHeight: 900 }); // 16:10 numa TV 16:9
+  await socket.onmessage({ data: JSON.stringify({ type: 'command', action: 'fill' }) });
+  assert.match(element('screen').style.cssText, /left:0px;top:-60px;width:1920px;height:1200px/);
+  await socket.onmessage({ data: JSON.stringify({ type: 'command', action: 'fit' }) });
+  assert.equal(element('screen').style.cssText, '');
+});
