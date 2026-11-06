@@ -46,6 +46,7 @@
     if ($('preview')) $('preview').srcObject = null;
     if ($('share')) { $('share').textContent = 'Compartilhar tela'; $('share').className = 'main-action'; $('live').hidden = true; $('fillToggle').setAttribute('aria-pressed', 'false'); }
     if (previewInk) previewInk.handle({ op: 'clear' }); // a ferramenta escolhida continua; os desenhos saem
+    if (setCompact && document.body.classList.contains('compact')) setCompact(false); // painel volta ao tamanho normal
     cleanup();
   }
   // Painel: volta para a escolha da TV.
@@ -402,7 +403,7 @@
     // Ferramentas (só no app Windows): o processo principal desenha sobre o app compartilhado e manda os eventos para cá.
     var desktop = window.salaDesktop;
     var endShare = function () { stop(); if (desktop) desktop.sharing(false); };
-    var setToolbar = null; // só no app Windows
+    var setToolbar = null, setCompact = null; // só no app Windows
     $('fillToggle').onclick = function () {
       var on = $('fillToggle').getAttribute('aria-pressed') !== 'true';
       $('fillToggle').setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -451,6 +452,16 @@
       var markToolbar = function (on) { $('toolbarToggle').setAttribute('aria-pressed', on ? 'true' : 'false'); };
       setToolbar = function (on) { desktop.toolbar(on); markToolbar(on); };
       $('toolbarToggle').onclick = function () { setToolbar($('toolbarToggle').getAttribute('aria-pressed') !== 'true'); };
+      // Modo mini: ao compartilhar, o painel encolhe para o canto da tela (preferência lembrada neste computador).
+      $('miniToggle').hidden = false; $('autoMiniRow').hidden = false;
+      $('autoMini').checked = load('sala-auto-mini', true);
+      $('autoMini').onchange = function () { save('sala-auto-mini', $('autoMini').checked); };
+      setCompact = function (on) {
+        document.body.classList.toggle('compact', on);
+        $('miniToggle').textContent = on ? '⤢ Expandir' : '⤡ Encolher para o canto';
+        desktop.compact(on);
+      };
+      $('miniToggle').onclick = function () { setCompact(!document.body.classList.contains('compact')); };
       // Pré-via como mesa de trabalho: as ferramentas da caixa também desenham aqui; o traço vai à TV e à tela real.
       var stage = $('stage'), preview = $('preview'), canvas = $('previewInk'), cursorTool = false;
       var previewFrame = function () { return SalaPen.fit(stage.clientWidth || 1, stage.clientHeight || 1, preview.videoWidth || 16, preview.videoHeight || 9); };
@@ -510,6 +521,7 @@
         $('preview').srcObject = stream;
         $('share').textContent = 'Parar transmissão'; $('share').className = 'main-action stop'; $('live').hidden = false;
         if (setToolbar && $('autoToolbar').checked) setToolbar(true);
+        if (setCompact && $('autoMini').checked) setCompact(true);
         var peer = connection();
         var videoTrack = stream.getVideoTracks()[0];
         if ('contentHint' in videoTrack) videoTrack.contentHint = 'motion';

@@ -40,6 +40,29 @@ app.whenReady().then(() => {
     return discovery.search(text, { onFound: tv => progress({ found: tv }), onProgress: (done, total) => progress({ done, total }) })
       .then(found => ({ ok: true, found }), error => ({ ok: false, message: error.message }));
   });
+  // Modo mini: durante a transmissão o painel vira uma janelinha no canto, por cima dos apps (fora da captura).
+  const { screen } = require('electron'), { miniBounds } = require('./compact');
+  const windowPrefsFile = require('node:path').join(app.getPath('userData'), 'window.json');
+  let windowPrefs = {}, compact = null; // compact: { bounds, maximized } da janela normal enquanto estiver mini
+  try { windowPrefs = JSON.parse(require('node:fs').readFileSync(windowPrefsFile, 'utf8')); } catch (_) {}
+  ipcMain.on('compact', (event, on) => {
+    if (!window || event.sender !== window.webContents) return;
+    if (on && !compact) {
+      compact = { bounds: window.getNormalBounds(), maximized: window.isMaximized() };
+      if (window.isMinimized()) window.restore();
+      if (compact.maximized) window.unmaximize();
+      const home = screen.getDisplayMatching(compact.bounds).workArea;
+      window.setMenuBarVisibility(false);
+      window.setBounds(miniBounds(screen.getAllDisplays().map(d => d.workArea), home, windowPrefs.mini || null));
+      window.setAlwaysOnTop(true, 'floating');
+    } else if (!on && compact) {
+      const saved = compact; compact = null;
+      window.setAlwaysOnTop(false);
+      window.setMenuBarVisibility(true);
+      window.setBounds(saved.bounds);
+      if (saved.maximized) window.maximize();
+    }
+  });
   ipcMain.handle('launch-tv', (event, ip) => (event.sender === window?.webContents && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? launchTv(ip) : null));
   service.server.listen(8787, '0.0.0.0', () => {
     startBeacon(8787);
@@ -57,6 +80,11 @@ app.whenReady().then(() => {
     });
     window = new BrowserWindow({ width: 1100, height: 900, backgroundColor: '#0b101b', title: 'M I.A. Shared View', icon: require('node:path').join(__dirname, 'assets', 'icon.png'), webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, preload: require('node:path').join(__dirname, 'desktop-preload.js') } });
     window.on('closed', () => app.quit()); // a camada de ferramentas também é uma janela
+    window.on('moved', () => {
+      if (!compact) return;
+      const [x, y] = window.getPosition(); windowPrefs.mini = { x, y };
+      require('node:fs').writeFile(windowPrefsFile, JSON.stringify(windowPrefs), () => {});
+    });
     window.loadURL('http://localhost:8787');
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith('http://localhost:8787/')) event.preventDefault(); });

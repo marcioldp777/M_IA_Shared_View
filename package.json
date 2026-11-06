@@ -55,6 +55,7 @@
       "tools.js",
       "discovery.js",
       "pass-through.js",
+      "compact.js",
       "*-preload.js",
       "installer/**",
       "public/**",

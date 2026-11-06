@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('salaDesktop', {
   launchTv: ip => ipcRenderer.invoke('launch-tv', ip),
   onSearchProgress: callback => ipcRenderer.on('search-progress', (_, data) => callback(data)),
   ink: msg => ipcRenderer.send('panel-ink', msg),
+  compact: on => ipcRenderer.send('compact', !!on),
   onAnnotate: callback => ipcRenderer.on('annotate', (_, msg) => callback(msg))
 });
