@@ -2,7 +2,7 @@ const { app, BrowserWindow, session, desktopCapturer, ipcMain } = require('elect
 const { createServer, startBeacon } = require('./server');
 const { createTools } = require('./tools');
 const discovery = require('./discovery');
-let service, window, lastChoice, tools;
+let service, window, lastChoice, tools, virtual, virtualSource = null;
 // Candidatos ICE com IP real: a TV não resolve nomes mDNS (.local) e não há STUN/TURN.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 // Painel minimizado continua codificando vídeo em ritmo normal.
@@ -32,6 +32,32 @@ app.whenReady().then(() => {
   const logFile = require('node:path').join(app.getPath('userData'), 'sala-tv.log');
   service = createServer({ diagnostics: process.env.SALA_DIAGNOSTICO === '1', log: line => require('node:fs').appendFile(logFile, `${new Date().toISOString()} ${line}\n`, () => {}) });
   tools = createTools(() => window);
+  // TV como 2º monitor: monitor virtual conectado à direita e transmitido sem o seletor.
+  virtual = require('./virtual-display').createVirtualDisplay({ win: require('./win-display'), screen: require('electron').screen });
+  virtual.disconnectAtStartup(); // sessão anterior fechada à força pode ter deixado a tela conectada
+  const fromPanel = event => event.sender === window?.webContents;
+  ipcMain.handle('vdd-status', event => (fromPanel(event) ? { installed: virtual.isInstalled() } : null));
+  ipcMain.handle('vdd-install', async event => {
+    if (!fromPanel(event)) return null;
+    const result = await require('./vdd-install').install({ resources: app.isPackaged ? process.resourcesPath : __dirname });
+    if (result.ok) virtual.disconnectAtStartup(); // a instalação deixa o monitor conectado
+    return result;
+  });
+  ipcMain.handle('vdd-on', async event => {
+    if (!fromPanel(event)) return null;
+    try {
+      const displayId = await virtual.on();
+      // O capturador pode levar um instante para listar a tela nova.
+      for (let attempt = 0; attempt < 6 && !virtualSource; attempt++) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, 300));
+        const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+        virtualSource = sources.find(source => String(source.display_id) === String(displayId)) || null;
+      }
+      if (!virtualSource) { virtual.off(); throw new Error(require('./virtual-display').FAILED); }
+      return { ok: true };
+    } catch (error) { return { ok: false, message: error.message }; }
+  });
+  ipcMain.on('vdd-off', event => { if (fromPanel(event)) { virtualSource = null; virtual.off(); } });
   // Busca por IP/faixa: lista as TVs Samsung; ao escolher uma, abre o receptor nela apontando para este PC.
   const launchTv = discovery.createLauncher(require('node:path').join(app.getPath('userData'), 'tv-tokens.json'), 8787);
   ipcMain.handle('search-tvs', (event, text) => {
@@ -69,6 +95,12 @@ app.whenReady().then(() => {
     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
       try {
         // Sem áudio = nova tentativa do painel após falha do loopback: reaproveita a escolha recente.
+        // Pedido do 2º monitor: essa tela vai direto, sem seletor (só uma vez; o próximo compartilhamento abre o seletor).
+        if (virtualSource) {
+          const source = virtualSource; virtualSource = null;
+          lastChoice = { source, time: Date.now() }; tools.setSource(source);
+          return callback(request.audioRequested ? { video: source, audio: 'loopback' } : { video: source });
+        }
         if (!request.audioRequested && lastChoice && Date.now() - lastChoice.time < 15000) { const { source } = lastChoice; lastChoice = null; tools.setSource(source); return callback({ video: source }); }
         const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 } });
         const choice = await pick(sources);
@@ -96,4 +128,4 @@ app.whenReady().then(() => {
   });
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { tools?.dispose(); if (service) { service.wss.clients.forEach(client => client.terminate()); service.server.close(); } });
+app.on('before-quit', () => { try { virtual?.off(); } catch (_) {} tools?.dispose(); if (service) { service.wss.clients.forEach(client => client.terminate()); service.server.close(); } });
