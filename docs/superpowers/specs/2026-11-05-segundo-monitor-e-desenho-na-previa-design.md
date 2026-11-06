@@ -48,7 +48,7 @@ Ao compartilhar a tela principal inteira, a camada transparente (`overlay`) cobr
 - Configuração: `C:\VirtualDisplayDriver\vdd_settings.xml` com 1 resolução 1920×1080 @ 60 Hz, gravada por `vdd/install.ps1`; a instalação deve terminar com o monitor desconectado.
 - Instalação **sob demanda**: o instalador do app não muda. No primeiro uso, o app executa o script de instalação silenciosa com elevação (UAC).
 
-> **Teste de 2026-11-05 (PC do autor, Windows 11, driver 25.7.23):** a instalação com `vdd/install.ps1` (SetupAPI + `UpdateDriverForPlugAndPlayDevicesW`, sem ferramenta de terceiros) deu `OK`; o dispositivo `ROOT\DISPLAY\0000` "Virtual Display Driver" iniciou e o monitor virtual já apareceu **conectado**. Pipe: `PING` sem resposta; `SETDISPLAYCOUNT 0` grava 0 no XML, mas o driver recarrega com 1 monitor, ou seja, **não desliga**. `ChangeDisplaySettingsExW` desconecta e reconecta o monitor sem administrador; conectar leva menos de 2 s. A posição precisa encostar na borda direita (uma posição arbitrária deixou um vão de 1024 px).
+> **Teste de 2026-11-05 (PC do autor, Windows 11, driver 25.7.23):** a instalação com `vdd/install.ps1` (SetupAPI + `UpdateDriverForPlugAndPlayDevicesW`, sem ferramenta de terceiros) deu `OK`; o dispositivo `ROOT\DISPLAY\0000` "Virtual Display Driver" iniciou e o monitor virtual já apareceu **conectado**. Pipe: `PING` sem resposta; `SETDISPLAYCOUNT 0` grava 0 no XML, mas o driver recarrega com 1 monitor, ou seja, **não desliga**. `ChangeDisplaySettingsExW` desconecta e reconecta o monitor sem administrador; conectar leva menos de 2 s. A posição usa pixels físicos (com escala de 125%, a tela de 4096 px "lógicos" tem 5120 px físicos; não houve vão).
 
 ### Fluxo do usuário
 
