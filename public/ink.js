@@ -20,9 +20,11 @@
   // frame(): retângulo em px CSS onde a área compartilhada aparece. options.video: fonte da lupa; options.pointer: desenhar o apontador.
   root.SalaInk = function (canvas, frame, options) {
     var ctx = canvas.getContext('2d'), items = [], tool = null, cursor = null, selection = null, board = null, raf = 0;
+    // Tamanho em px CSS: o do elemento (options.box, ex.: pré-via do painel) ou a janela inteira.
+    function boxSize() { return options.box ? options.box() : { width: root.innerWidth, height: root.innerHeight }; }
     function resize() {
-      var ratio = root.devicePixelRatio || 1;
-      canvas.width = root.innerWidth * ratio; canvas.height = root.innerHeight * ratio;
+      var ratio = root.devicePixelRatio || 1, box = boxSize();
+      canvas.width = box.width * ratio; canvas.height = box.height * ratio;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); schedule();
     }
     function at(f, p) { return [f.x + p[0] * f.w, f.y + p[1] * f.h]; }
@@ -52,9 +54,9 @@
     }
     function draw() {
       raf = 0;
-      var f = frame(), now = Date.now(), fading = false;
-      ctx.clearRect(0, 0, root.innerWidth, root.innerHeight);
-      if (board) { ctx.globalAlpha = 1; ctx.fillStyle = BOARDS[board]; ctx.fillRect(0, 0, root.innerWidth, root.innerHeight); }
+      var f = frame(), now = Date.now(), fading = false, box = boxSize();
+      ctx.clearRect(0, 0, box.width, box.height);
+      if (board) { ctx.globalAlpha = 1; ctx.fillStyle = BOARDS[board]; ctx.fillRect(0, 0, box.width, box.height); }
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       items = items.filter(function (item) { return item.tool !== 'laser' || now - item.last < LASER_HOLD + LASER_FADE; });
       items.forEach(function (item) {
@@ -147,6 +149,6 @@
       schedule();
     }
     root.addEventListener('resize', resize); resize();
-    return { handle: handle, redraw: schedule, hit: hit };
+    return { handle: handle, redraw: schedule, hit: hit, resize: resize };
   };
 })(window);

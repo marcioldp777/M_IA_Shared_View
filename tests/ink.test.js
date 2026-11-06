@@ -86,3 +86,18 @@ test('formas, laser que some, holofote e quadro', () => {
   assert.ok(calls.some(c => c[0] === 'set:fillStyle' && c[1] === '#ffffff'));
   assert.equal(calls.filter(c => c[0] === 'stroke').length, 0); // entrar no quadro limpa os desenhos
 });
+
+test('ink com options.box usa o tamanho do elemento', () => {
+  const calls = [];
+  const ctx = new Proxy({}, { get: (t, key) => key in t ? t[key] : (...args) => calls.push([key, ...args]), set: (t, key, value) => { t[key] = value; return true; } });
+  let frames = [];
+  const window = { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 2, addEventListener() {}, requestAnimationFrame: fn => { frames.push(fn); return frames.length; } };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../public/ink.js'), 'utf8'), { window, Math, isFinite, Infinity, Date: { now: () => 1000 } });
+  const canvas = { getContext: () => ctx };
+  const ink = window.SalaInk(canvas, () => ({ x: 0, y: 0, w: 640, h: 360 }), { box: () => ({ width: 640, height: 360 }) });
+  ink.resize();
+  assert.equal(canvas.width, 1280); assert.equal(canvas.height, 720);
+  ink.handle({ op: 'board', mode: 'white' });
+  calls.length = 0; const pending = frames; frames = []; pending.forEach(fn => fn());
+  assert.deepEqual(calls.find(c => c[0] === 'fillRect'), ['fillRect', 0, 0, 640, 360]);
+});
